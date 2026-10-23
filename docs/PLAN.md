@@ -19,7 +19,7 @@ PumpPortal / Helius stream
 - [x] ingest: single PumpPortal ws, subscribe to wallets, auto-subscribe to their tokens
 - [x] simulator: $25 entries/exits at +2s/+10s/+60s with fees + slippage
 - [x] wallets loaded from wallets.txt
-- [ ] run 24/7 on VPS
+- [ ] run 24/7 on VPS (compose + README VPS steps ready; needs a server)
 
 ## Phase 2: Scoring + discovery
 - [x] rolling 14/30-day copyability score per wallet

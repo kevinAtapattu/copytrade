@@ -1,12 +1,162 @@
 # copytrade
 
-Solana / pump.fun copy-trading research platform. Paper-tracks wallets, scores how
-copyable they are at realistic delays, and (later) executes live copies on the best ones.
+Solana / pump.fun copy-trading research platform. It paper-tracks many wallets and measures **copyability**: the PnL we would really get copying each wallet at +2s, +10s and +60s, after pump.fun fees, priority fees and curve slippage. Only wallets that stay positive for 2+ weeks get copied, and live trading stays off until you turn it on.
 
-## Stack
-- **Go**: ingest, simulator, scorer, API, executor
-- **Postgres** storage, **Redis Streams** event bus
-- **Next.js** dashboard
-- **Docker Compose** for local + VPS
+- **Go**: ingest, simulator, scorer, discovery, API, executor, alerter (one process each)
+- **Postgres** for storage, **Redis Streams** as the event bus
+- **Next.js + Recharts** dashboard
+- **Docker Compose** for local and VPS
 
-See `docs/PLAN.md` for phases and `CLAUDE.md` for project context.
+See `docs/PLAN.md` for phases, `docs/DECISIONS.md` for every judgment call, `CLAUDE.md` for project context.
+
+## Architecture
+
+```
+                 PumpPortal websocket (ONE connection)
+                 subscribeAccountTrade: tracked wallets
+                 subscribeTokenTrade:   tokens they touch
+                              |
+                        +-----v------+      RECORD_FILE (optional JSONL,
+                        |   ingest   |----> replayable later)
+                        +-----+------+
+             persist raw      |      publish
+        +---------------------+----------------------+
+        |                                            |
+        v                                  Redis Stream "trades"
+  +-----------+                         /             |            \
+  | Postgres  |<---------------- simulator        executor        (more consumers
+  |           |   sim_trades     +2/+10/+60s       paper | live     later: shards,
+  |  wallets  |   sim_positions  $25 copies        PumpPortal       strategies)
+  |  trades   |                                    trade-local
+  |  scores   |<---- scorer (5 min): 14/30d scores, live/bench rotation
+  |  ...      |<---- discovery (10 min): 5x tokens -> early buyers -> bench, auto-drop
+  +-----+-----+
+        |                    Redis Stream "events" (fills, rotations, errors)
+        |                         |                       |
+   +----v----+   SSE + REST  +----v----+            +-----v----+
+   |   api   |<--------------| (hub)   |            | alerter  |--> Telegram
+   +----+----+               +---------+            +----------+
+        |
+   +----v------+
+   | dashboard |  http://localhost:3000
+   +-----------+
+```
+
+Every service is its own process with its own consumer group, so each can be scaled or swapped on its own. `internal/source.Source` is the seam for a future Helius gRPC / LaserStream source.
+
+## Try it now, no keys and no Docker
+
+Everything runs in-process on 21 days of scripted fixture data:
+
+```bash
+export PATH="$HOME/sdk/go/bin:$PATH"     # Go was installed here (see Prereqs)
+go test ./...                             # unit + end-to-end tests
+go run ./cmd/replay                       # replay fixtures, print the leaderboard + rotations
+go run ./cmd/replay -serve :8080          # ...then keep serving the API on that data
+cd dashboard && npm install && API_URL=http://localhost:8080 npm run dev   # http://localhost:3000
+```
+
+The fixture has a good wallet (promoted after 14 days), a lucky one-trade wallet (blocked), a fast flipper (loses at +2s), a live wallet that hits -25% drawdown (demoted), an idle wallet (dropped), and two early buyers on 5x tokens (discovered). The executor paper-trades whatever is live.
+
+## Prereqs (macOS)
+
+1. **Accept the Xcode license** (needs your password). Homebrew and `make` are blocked until you do:
+   `sudo xcodebuild -license accept`
+2. **Go** is installed at `~/sdk/go` (official 1.27.3 tarball, since brew was blocked). The PATH line was added to `~/.zprofile`; open a new terminal or `source ~/.zprofile`.
+3. **Docker Desktop** was copied to `/Applications/Docker.app`. Open it once and approve its setup prompts (privileged helper, license). Then `docker compose version` should work.
+4. Node 23 is already installed (dashboard).
+
+## Run locally with Docker
+
+```bash
+cp .env.example .env              # then fill keys, see KEYS NEEDED below
+cp wallets.example.txt wallets.txt  # then put real wallets in it, one per line
+make up                           # or: docker compose up -d --build
+make logs                         # or: docker compose logs -f --tail=100
+open http://localhost:3000
+make down
+```
+
+Other targets: `make test`, `make migrate` (migrate + seed wallets.txt against `DATABASE_URL`), `make replay`, `make replay-db` (replay into Postgres so the dashboard shows it; **wipes the DB**), `make fixtures`, `make dev-deps` (only Postgres + Redis in Docker, run Go services with `go run ./cmd/<name>`), `make dashboard-dev`.
+
+Services: `migrate` (one-shot), `ingest`, `simulator`, `scorer`, `discovery`, `executor`, `alerter`, `api` (:8080), `dashboard` (:3000), `postgres` (:5432), `redis` (:6379). All ports bind to 127.0.0.1.
+
+To add or remove wallets later, use the dashboard (Wallets page) or edit `wallets.txt` and run `docker compose run --rm migrate`. Seeding only adds wallets; it never changes the status of existing ones.
+
+To record real data for later replays, set `RECORD_FILE=/app/fixtures/recorded.jsonl` for `ingest` and mount `./fixtures`. Then run `go run ./cmd/replay -fixture fixtures/recorded.jsonl -wallets wallets.txt`.
+
+## Run on a VPS
+
+Any Ubuntu 22.04/24.04 box with 2 vCPU / 4 GB works. For copy speed later, pick a region near Solana validators (Frankfurt, Amsterdam, NY, or Tokyo DCs).
+
+```bash
+# on the VPS
+curl -fsSL https://get.docker.com | sh
+git clone <your repo> copytrade && cd copytrade
+cp .env.example .env && nano .env          # keys
+nano wallets.txt                           # wallets
+docker compose up -d --build
+docker compose ps
+```
+
+The dashboard and API listen on 127.0.0.1 only. Reach them from your laptop over SSH:
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 user@your-vps   # then open http://localhost:3000
+```
+
+If you want it public, put Caddy or nginx in front with HTTPS and basic auth. The dashboard has a kill switch and wallet controls, so never expose it without auth. `restart: unless-stopped` keeps everything up 24/7 across reboots (Docker starts on boot).
+
+Never run two ingest instances against the same API key. PumpPortal bans clients that open parallel or repeated connections.
+
+## Tested vs untested without keys
+
+**Tested** (`go test ./...`, all passing with `-race`):
+- Curve math, fee math, simulator fills at each delay, mirror sells, skips, migrations
+- Scorer metrics, one-lucky-trade check, drawdown
+- Rotation and auto-drop rules
+- Ingest subscribe/cooldown/unsubscribe and dedupe
+- PumpPortal websocket client against a fake server (one connection, resubscribe on reconnect)
+- Redis Streams consumer groups (miniredis)
+- Solana tx parse and sign
+- Live trader against fake PumpPortal + RPC (build, sign, send, confirm, fill parsing, retries)
+- Executor risk controls (kill switch, max open, stop-loss, daily loss limit)
+- Full end-to-end replay, plus the API on top of it
+
+**Also verified by hand:**
+- Replay into a real Postgres 16 gives identical results to the in-memory store
+- Every API endpoint and the dashboard (all pages, SSE through the Next.js proxy) render on that data
+- `docker compose config` validates
+
+**Untested until keys/Docker exist:**
+- The real PumpPortal message format. Built from docs plus community examples, parsed leniently. Watch the ingest logs for the first frames.
+- Real `trade-local` responses and on-chain fills
+- Jito bundle submission
+- Telegram delivery
+- The Docker image build and `compose up` (Docker Desktop needs its first-launch approval)
+- CoinGecko price fetch (falls back to `SOL_USD_FALLBACK`)
+
+## Going live, step by step
+
+1. Do Prereqs, fill `PUMPPORTAL_API_KEY`, add wallets, `make up`. Check Health: PumpPortal "connected", messages flowing.
+2. Let it paper-track for 2+ weeks. The scorer promotes wallets to live only when they are positive over 14d and 30d at +2s, not driven by one trade, with 10+ trades and under 25% drawdown. Meanwhile the executor paper-trades live wallets (`LIVE_TRADING=false`).
+3. Go/no-go (from PLAN.md): 2-3 wallets positive for 2+ weeks at +2s after costs, and the Executor page's "gap vs sim" is small.
+4. Create a fresh hot wallet (Phantom or `solana-keygen new`), fund it with the $500 play money plus about 0.05 SOL for fees. Put its secret key in `TRADER_PRIVATE_KEY` and set a paid `SOLANA_RPC_URL`.
+5. Set `LIVE_TRADING=true`, then `docker compose up -d executor`. The executor logs `LIVE TRADING ENABLED` with the wallet address, and the dashboard shows mode LIVE.
+6. Watch the first few fills on the Executor page. The kill switch stops new buys instantly; exits keep working.
+
+## KEYS NEEDED
+
+Fill these in `.env` (copy from `.env.example`). Everything else has working defaults.
+
+| Variable | Needed for | Where to get it |
+|---|---|---|
+| `PUMPPORTAL_API_KEY` | **Required** for any live data | pumpportal.fun, "Create API Key" (Data API docs). It generates a key plus a linked wallet; fund that wallet with **at least 0.02 SOL** (streams cost 0.01 SOL per 10k messages; the Health page estimates usage). |
+| `SOLANA_RPC_URL` | Live trading (sending and confirming txs) | Helius (helius.dev), Triton, or QuickNode free/paid tier. The public mainnet RPC rate-limits sends. |
+| `TRADER_PRIVATE_KEY` | Live trading only | Your **new, small** hot wallet's secret key: base58 export from Phantom/Solflare, or the JSON array from `solana-keygen new -o key.json`. Never your main wallet. |
+| `LIVE_TRADING` | Live trading only | Set to `true` only when you are ready (step 5 above). |
+| `TELEGRAM_BOT_TOKEN` | Optional alerts | Message @BotFather on Telegram, `/newbot`. |
+| `TELEGRAM_CHAT_ID` | Optional alerts | Send your bot any message, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `chat.id`. |
+| `JITO_TIP_SOL` | Optional, faster landing | No key needed. Set e.g. `0.0001` to send through Jito's block engine with that tip. |
+
+Also put your wallets in `wallets.txt` (not a key, but nothing gets tracked without it).
