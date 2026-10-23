@@ -73,4 +73,11 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - Plain `net/http` with Go 1.22+ route patterns, no framework. CORS is open (`*`) because it binds to 127.0.0.1 and the dashboard proxies to it anyway.
 - Live updates use SSE (`/api/stream`), not websockets: one-way, works through the Next.js proxy, auto-reconnects in the browser. One hub goroutine tails the Redis `events` stream and fans out to clients. Slow clients drop messages instead of blocking.
 - The overview defaults to live wallets at +2s. While no wallet is live yet, it shows all bench wallets so the page is not empty.
-- PumpPortal SOL usage = token trades stored / 10,000 * 0.01 SOL. Every metered message we keep is one stored trade (dupes across account+token subs are a small overcount we ignore). The monthly figure extrapolates the last 24h.
+- PumpPortal SOL usage = token trades stored / 10,000 * 0.01 SOL. Every metered message we keep is one stored trade (a tracked wallet's trade can arrive twice, on its account and token subs, so this slightly undercounts). The monthly figure extrapolates the last 24h.
+
+## Dashboard
+- Next.js 16 app router, every page a client component. A catch-all route handler (`app/api/[...path]`) proxies to the Go API at runtime (`API_URL`), so the browser talks to a single origin. One build works on localhost and on a VPS, and SSE streams through.
+- Package versions are pinned exactly to releases at least two weeks old (next 16.3.8, react 19.3.0, recharts 3.10.1, TypeScript 5.9.3).
+- There are no data-fetching libraries. A small `useApi` hook refetches every 15s, and on live SSE events (throttled to once per 2s).
+- Dark only. Chart series use the first three slots of the validated reference palette, dark steps (blue/orange/aqua, all checks pass on `#1a1a19`). PnL numbers carry a +/- sign as well as color.
+- The add/remove/promote/bench buttons call the API directly. Removing a wallet sets it to `dropped` (history is kept, and you can re-add it).

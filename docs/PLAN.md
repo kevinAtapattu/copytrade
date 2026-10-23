@@ -28,10 +28,10 @@ PumpPortal / Helius stream
 - [x] auto-drop inactive/bad wallets
 
 ## Phase 3: Dashboard
-- [ ] overview (equity, PnL, open positions)
-- [ ] wallet leaderboard (live vs bench)
-- [ ] wallet detail (their trades vs our sim fills by delay)
-- [ ] trade log, discovery queue, health (stream lag, failed tx)
+- [x] overview (equity, PnL, open positions)
+- [x] wallet leaderboard (live vs bench)
+- [x] wallet detail (their trades vs our sim fills by delay)
+- [x] trade log, discovery queue, health (stream lag, failed tx)
 
 ## Go / no-go
 2-3 wallets positive for 2+ weeks at +2s delay after costs.

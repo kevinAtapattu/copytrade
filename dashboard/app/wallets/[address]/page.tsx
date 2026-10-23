@@ -1,0 +1,99 @@
+"use client";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import LineChart, { mergeSeries } from "@/components/LineChart";
+import { Err, Stat, Table } from "@/components/ui";
+import { Point, Rotation, Score, SimPosition, SimTrade, Trade, Wallet, useApi } from "@/lib/api";
+import { ago, dur, num, pct, pnlClass, price, short, time, usd } from "@/lib/format";
+
+type Detail = {
+  wallet: Wallet; scores: Score[]; score_history: Record<string, Score[]>; equity: Record<string, Point[]>;
+  trades: (Trade & { price: number; sims: Record<string, SimTrade> })[]; positions: SimPosition[]; rotations: Rotation[] | null;
+};
+
+const DELAYS = [2, 10, 60];
+const COLORS: Record<number, string> = { 2: "var(--series-1)", 10: "var(--series-2)", 60: "var(--series-3)" };
+
+export default function WalletDetail() {
+  const { address } = useParams<{ address: string }>();
+  const { data, error } = useApi<Detail>(`wallets/${address}`);
+  const s = (d: number, w: number) => data?.scores?.find((x) => x.delay_s === d && x.window_days === w);
+  const rows = mergeSeries(Object.fromEntries(DELAYS.map((d) => [`d${d}`, data?.equity?.[String(d)]])));
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h2><span className="mono" style={{ fontSize: 16 }}>{address}</span></h2>
+          <div className="sub">
+            {data && <><span className={`badge ${data.wallet.status}`}>{data.wallet.status}</span> {data.wallet.label} · {data.wallet.source}: {data.wallet.reason} · last trade {ago(data.wallet.last_trade_at)}</>}
+          </div>
+        </div>
+        <div className="row">
+          <a className="btn" href={`https://solscan.io/account/${address}`} target="_blank">Solscan</a>
+          <Link className="btn" href="/wallets">Back</Link>
+        </div>
+      </div>
+      <Err error={error} />
+      <div className="grid stats">
+        {DELAYS.map((d) => (
+          <Stat key={d} label={`14d sim PnL at +${d}s`} value={usd(s(d, 14)?.pnl_usd, true)} tone={s(d, 14)?.pnl_usd}
+            hint={`score ${num(s(d, 14)?.score)} · ex-best ${usd(s(d, 14)?.pnl_ex_best_usd, true)} · DD ${pct(s(d, 14)?.max_drawdown)}`} />
+        ))}
+        <Stat label="Win rate +2s (14d)" value={pct(s(2, 14)?.win_rate, 0)} hint={`${s(2, 14)?.positions ?? 0} positions, avg hold ${dur(s(2, 14)?.avg_hold_s)}`} />
+      </div>
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3>Cumulative simulated PnL by delay (30d, USD)</h3>
+        <LineChart rows={rows} series={DELAYS.map((d) => ({ key: `d${d}`, label: `+${d}s`, color: COLORS[d] }))} />
+      </div>
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3>Their trades vs our simulated fills</h3>
+        <Table rows={data?.trades ?? []} rowKey={(t) => t.signature} empty="No trades seen yet" cols={[
+          { key: "at", label: "Time", render: (t) => time(t.received_at) },
+          { key: "side", label: "Side", render: (t) => <span className={t.side === "buy" ? "pos" : "neg"}>{t.side}</span> },
+          { key: "mint", label: "Token", render: (t) => <a className="mono" href={`https://pump.fun/coin/${t.mint}`} target="_blank">{short(t.mint)}</a> },
+          { key: "sol", label: "Their SOL", num: true, render: (t) => num(t.sol_amount, 3) },
+          { key: "px", label: "Their price", num: true, render: (t) => <span className="mono">{price(t.price)}</span> },
+          ...DELAYS.map((d) => ({
+            key: `s${d}`, label: `+${d}s fill`, num: true,
+            render: (t: Detail["trades"][number]) => {
+              const x = t.sims?.[String(d)];
+              if (!x) return <span className="muted">pending</span>;
+              if (x.skipped) return <span className="muted" title={x.skip_reason}>skip</span>;
+              const gap = t.price ? (x.fill_price / t.price - 1) * (t.side === "buy" ? 1 : -1) : 0;
+              return (
+                <span title={`slippage ${x.slippage_pct.toFixed(2)}%, pump fee ${x.pump_fee_sol.toFixed(5)} SOL`}>
+                  <span className="mono">{price(x.fill_price)}</span> <span className={pnlClass(-gap)}>{gap >= 0 ? "+" : ""}{(gap * 100).toFixed(1)}%</span>
+                </span>
+              );
+            },
+          })),
+          { key: "sig", label: "Tx", render: (t) => <a className="mono muted" href={`https://solscan.io/tx/${t.signature}`} target="_blank">{short(t.signature)}</a> },
+        ]} />
+        <div className="sub" style={{ marginTop: 8 }}>Percent = how much worse our all-in price was than theirs (fees + delay + slippage).</div>
+      </div>
+      <div className="grid two" style={{ marginTop: 14 }}>
+        <div className="card">
+          <h3>Simulated positions (30d)</h3>
+          <Table rows={data?.positions ?? []} rowKey={(p) => p.id} initialSort={{ key: "opened", desc: true }} cols={[
+            { key: "d", label: "Delay", sort: (p) => p.delay_s, render: (p) => `+${p.delay_s}s` },
+            { key: "mint", label: "Token", render: (p) => <span className="mono">{short(p.mint)}</span> },
+            { key: "opened", label: "Opened", sort: (p) => p.opened_at, render: (p) => time(p.opened_at) },
+            { key: "st", label: "Status", render: (p) => p.status },
+            { key: "pnl", label: "Realized", num: true, sort: (p) => (p.proceeds_sol - p.cost_sol) * p.sol_usd,
+              render: (p) => p.status === "open" ? <span className="muted">open</span> :
+                <span className={pnlClass(p.proceeds_sol - p.cost_sol)}>{usd((p.proceeds_sol - p.cost_sol) * p.sol_usd, true)}</span> },
+          ]} />
+        </div>
+        <div className="card">
+          <h3>Status history</h3>
+          <Table rows={data?.rotations ?? []} rowKey={(r) => String(r.id)} empty="No status changes" cols={[
+            { key: "at", label: "When", render: (r) => time(r.at) },
+            { key: "ch", label: "Change", render: (r) => `${r.from_status} -> ${r.to_status}` },
+            { key: "why", label: "Reason", render: (r) => <span className="muted">{r.reason}</span> },
+          ]} />
+        </div>
+      </div>
+    </>
+  );
+}
