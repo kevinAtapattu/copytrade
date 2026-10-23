@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mr-tron/base58"
@@ -153,6 +154,54 @@ func (t *Tx) BlockhashBase58() string { return base58.Encode(t.Blockhash) }
 type RPC struct {
 	URL    string
 	Client *http.Client
+	// RPS caps request rate (0 = unlimited). Helius free tier allows 10/s.
+	RPS float64
+
+	mu       sync.Mutex
+	next     time.Time
+	day      time.Time
+	calls    int64
+	callsAll int64
+}
+
+// Calls returns requests made today (UTC) and since start.
+func (r *RPC) Calls() (today, total int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.day.Equal(time.Now().UTC().Truncate(24 * time.Hour)) {
+		return 0, r.callsAll
+	}
+	return r.calls, r.callsAll
+}
+
+// wait blocks until the rate limit allows another request, and counts it.
+func (r *RPC) wait(ctx context.Context) error {
+	r.mu.Lock()
+	now := time.Now()
+	if d := now.UTC().Truncate(24 * time.Hour); !d.Equal(r.day) {
+		r.day, r.calls = d, 0
+	}
+	r.calls++
+	r.callsAll++
+	var sleep time.Duration
+	if r.RPS > 0 {
+		gap := time.Duration(float64(time.Second) / r.RPS)
+		if r.next.Before(now) {
+			r.next = now
+		}
+		sleep = r.next.Sub(now)
+		r.next = r.next.Add(gap)
+	}
+	r.mu.Unlock()
+	if sleep <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(sleep):
+		return nil
+	}
 }
 
 func NewRPC(url string) *RPC { return &RPC{URL: url, Client: &http.Client{Timeout: 20 * time.Second}} }
@@ -174,7 +223,92 @@ type rpcErr struct {
 }
 
 func (r *RPC) call(ctx context.Context, method string, params []any, out any) error {
+	if err := r.wait(ctx); err != nil {
+		return err
+	}
 	return postJSONRPC(ctx, r.Client, r.URL, method, params, out)
+}
+
+// GetMultipleAccounts returns raw account data for up to 100 addresses (nil where
+// the account does not exist). Commitment "processed" for the freshest state.
+func (r *RPC) GetMultipleAccounts(ctx context.Context, addrs []string) ([][]byte, error) {
+	var res struct {
+		Value []*struct {
+			Data []string `json:"data"` // [base64, "base64"]
+		} `json:"value"`
+	}
+	err := r.call(ctx, "getMultipleAccounts", []any{addrs, map[string]any{"encoding": "base64", "commitment": "processed"}}, &res)
+	if err != nil {
+		return nil, err
+	}
+	out := make([][]byte, len(addrs))
+	for i, v := range res.Value {
+		if i >= len(out) || v == nil || len(v.Data) == 0 {
+			continue
+		}
+		b, err := base64.StdEncoding.DecodeString(v.Data[0])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = b
+	}
+	return out, nil
+}
+
+type SigInfo struct {
+	Signature string `json:"signature"`
+	BlockTime int64  `json:"blockTime"`
+	Err       any    `json:"err"`
+}
+
+// GetSignaturesForAddress lists signatures newest first, paging with before.
+func (r *RPC) GetSignaturesForAddress(ctx context.Context, addr, before string, limit int) ([]SigInfo, error) {
+	opts := map[string]any{"limit": limit, "commitment": "confirmed"}
+	if before != "" {
+		opts["before"] = before
+	}
+	var out []SigInfo
+	err := r.call(ctx, "getSignaturesForAddress", []any{addr, opts}, &out)
+	return out, err
+}
+
+// TxEvents is the raw material for decoding program events from one transaction:
+// log lines and inner-instruction data (where emit_cpi events live).
+type TxEvents struct {
+	Signature string
+	BlockTime time.Time
+	Logs      []string
+	InnerData [][]byte
+	Failed    bool
+}
+
+func (r *RPC) GetTxEvents(ctx context.Context, sig string) (TxEvents, error) {
+	var tx struct {
+		BlockTime int64 `json:"blockTime"`
+		Meta      struct {
+			Err               any      `json:"err"`
+			LogMessages       []string `json:"logMessages"`
+			InnerInstructions []struct {
+				Instructions []struct {
+					Data string `json:"data"`
+				} `json:"instructions"`
+			} `json:"innerInstructions"`
+		} `json:"meta"`
+	}
+	err := r.call(ctx, "getTransaction", []any{sig, map[string]any{"encoding": "json", "commitment": "confirmed",
+		"maxSupportedTransactionVersion": 0}}, &tx)
+	if err != nil {
+		return TxEvents{}, err
+	}
+	ev := TxEvents{Signature: sig, BlockTime: time.Unix(tx.BlockTime, 0).UTC(), Logs: tx.Meta.LogMessages, Failed: tx.Meta.Err != nil}
+	for _, ii := range tx.Meta.InnerInstructions {
+		for _, in := range ii.Instructions {
+			if b, err := base58.Decode(in.Data); err == nil {
+				ev.InnerData = append(ev.InnerData, b)
+			}
+		}
+	}
+	return ev, nil
 }
 
 func postJSONRPC(ctx context.Context, c *http.Client, url, method string, params []any, out any) error {

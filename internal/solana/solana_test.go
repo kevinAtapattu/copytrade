@@ -1,9 +1,11 @@
 package solana
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/mr-tron/base58"
 )
@@ -103,5 +105,22 @@ func TestParseTruncated(t *testing.T) {
 	raw := buildTx(make([]byte, 32), true)
 	if _, err := ParseTx(raw[:80]); err == nil {
 		t.Fatal("truncated tx should fail")
+	}
+}
+
+func TestRateLimitAndCount(t *testing.T) {
+	r := &RPC{RPS: 20}
+	start := time.Now()
+	for i := 0; i < 5; i++ {
+		if err := r.wait(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 5 calls at 20/s: the last waits ~200ms
+	if el := time.Since(start); el < 180*time.Millisecond || el > 600*time.Millisecond {
+		t.Fatalf("elapsed %v", el)
+	}
+	if today, total := r.Calls(); today != 5 || total != 5 {
+		t.Fatalf("calls %d %d", today, total)
 	}
 }
