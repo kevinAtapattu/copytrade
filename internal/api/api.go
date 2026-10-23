@@ -173,7 +173,8 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		}
 		return t
 	}
-	live, _ := s.Store.ListLivePositions(ctx, store.LiveFilter{Since: now.AddDate(0, 0, -90)})
+	execMode := s.viewMode(r)
+	live, _ := s.Store.ListLivePositions(ctx, store.LiveFilter{Mode: execMode, Since: now.AddDate(0, 0, -90)})
 	var execOuts []score.Outcome
 	for _, p := range live {
 		execOuts = append(execOuts, valueLive(p, toks(p.Mint), fees, now))
@@ -185,6 +186,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		"exec_equity":    dailySeries(execOuts),
 		"open_positions": open,
 		"exec_open":      filterOpen(live),
+		"exec_mode":      execMode,
 		"positions":      len(outs),
 	})
 }
@@ -591,13 +593,14 @@ func (s *Server) executor(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := s.Now()
 	kill, _, _ := s.Store.GetSetting(ctx, store.SettingKillSwitch)
-	fills, err := s.Store.ListLiveFills(ctx, store.LiveFilter{Limit: qInt(r, "limit", 200)})
+	view := s.viewMode(r)
+	fills, err := s.Store.ListLiveFills(ctx, store.LiveFilter{Mode: view, Limit: qInt(r, "limit", 200)})
 	if err != nil {
 		fail(w, 500, err)
 		return
 	}
 	s.attachSim(ctx, fills)
-	pos, _ := s.Store.ListLivePositions(ctx, store.LiveFilter{Since: now.AddDate(0, 0, -30)})
+	pos, _ := s.Store.ListLivePositions(ctx, store.LiveFilter{Mode: view, Since: now.AddDate(0, 0, -30)})
 	day := now.UTC().Truncate(24 * time.Hour)
 	var dayPnl, gapSum float64
 	gapN := 0
@@ -616,16 +619,13 @@ func (s *Server) executor(w http.ResponseWriter, r *http.Request) {
 			gapN++
 		}
 	}
-	mode := "paper"
-	if s.Cfg.LiveTrading {
-		mode = "live"
-	}
 	avgGap := 0.0
 	if gapN > 0 {
 		avgGap = gapSum / float64(gapN)
 	}
 	writeJSON(w, 200, map[string]any{
-		"mode": mode, "kill_switch": kill == "on", "fills": fills, "positions": pos,
+		// mode: what the executor is running now; view: which results this response shows
+		"mode": s.runMode(), "view": view, "kill_switch": kill == "on", "fills": fills, "positions": pos,
 		"day_realized_usd": dayPnl, "daily_loss_limit_usd": s.Cfg.DailyLossLimitUSD,
 		"max_open_positions": s.Cfg.MaxOpenPositions, "stop_loss_pct": s.Cfg.StopLossPct, "size_usd": s.Cfg.ExecSizeUSD,
 		// positive = worse than simulated
@@ -651,6 +651,24 @@ func (s *Server) attachSim(ctx context.Context, fills []model.LiveFill) {
 			}
 		}
 	}
+}
+
+// runMode is the executor's configured mode.
+func (s *Server) runMode() string {
+	if s.Cfg.LiveTrading {
+		return "live"
+	}
+	return "paper"
+}
+
+// viewMode picks which executor results to show: ?mode=paper|live, defaulting to
+// the mode the executor is running in, so paper and real money never mix in totals.
+func (s *Server) viewMode(r *http.Request) string {
+	switch m := r.URL.Query().Get("mode"); m {
+	case "paper", "live":
+		return m
+	}
+	return s.runMode()
 }
 
 func (s *Server) kill(w http.ResponseWriter, r *http.Request) {

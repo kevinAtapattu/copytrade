@@ -9,13 +9,15 @@ import { ago, num, pnlClass, short, usd } from "@/lib/format";
 type Overview = {
   delay: number; scope: string; wallet_counts: Record<string, number>; bankroll_usd: number;
   pnl: { day: number; week: number; month: number; all: number };
-  equity: Point[]; exec_equity: Point[]; open_positions: SimPosition[]; exec_open: LivePosition[]; positions: number;
+  equity: Point[]; exec_equity: Point[]; open_positions: SimPosition[]; exec_open: LivePosition[]; exec_mode: string; positions: number;
 };
 
 export default function OverviewPage() {
   const [delay, setDelay] = useState(2);
   const [scope, setScope] = useState<"" | "all">("");
-  const { data, error } = useApi<Overview>(`overview?delay=${delay}&scope=${scope}`);
+  const [execView, setExecView] = useState<"" | "paper" | "live">("");
+  const { data, error } = useApi<Overview>(`overview?delay=${delay}&scope=${scope}${execView ? `&mode=${execView}` : ""}`);
+  const shownExec = (execView || data?.exec_mode || "paper") as "paper" | "live";
   const { events } = useEvents();
   const rows = mergeSeries({ sim: data?.equity, exec: data?.exec_equity });
   const hasExec = (data?.exec_equity?.length ?? 0) > 0;
@@ -31,6 +33,7 @@ export default function OverviewPage() {
         <div className="row">
           <Seg value={scope} onChange={setScope} options={[{ v: "", label: "Live wallets" }, { v: "all", label: "All tracked" }]} />
           <Seg value={delay} onChange={setDelay} options={[2, 10, 60].map((d) => ({ v: d, label: `+${d}s` }))} />
+          <Seg value={shownExec} onChange={setExecView} options={[{ v: "paper", label: "Paper" }, { v: "live", label: "Live" }]} />
         </div>
       </div>
       <Err error={error} />
@@ -43,10 +46,10 @@ export default function OverviewPage() {
       </div>
       <div className="grid" style={{ marginTop: 14 }}>
         <div className="card">
-          <h3>Cumulative PnL (USD){hasExec ? ", simulated vs executor" : ""}</h3>
+          <h3>Cumulative PnL (USD){hasExec ? `, simulated vs executor (${shownExec})` : ""}</h3>
           <LineChart rows={rows} series={[
             { key: "sim", label: `Simulated +${delay}s`, color: "var(--series-1)" },
-            ...(hasExec ? [{ key: "exec", label: "Executor fills", color: "var(--series-2)" }] : []),
+            ...(hasExec ? [{ key: "exec", label: `Executor ${shownExec} fills`, color: "var(--series-2)" }] : []),
           ]} />
         </div>
       </div>
@@ -65,7 +68,7 @@ export default function OverviewPage() {
             ]} />
           {(data?.exec_open?.length ?? 0) > 0 && (
             <>
-              <h3 style={{ marginTop: 16 }}>Executor open positions ({data!.exec_open.length})</h3>
+              <h3 style={{ marginTop: 16 }}>Executor open positions, {shownExec} ({data!.exec_open.length})</h3>
               <Table rows={data!.exec_open} rowKey={(p) => p.id} cols={[
                 { key: "mode", label: "Mode", render: (p) => <span className="badge">{p.mode}</span> },
                 { key: "wallet", label: "Wallet", render: (p) => <span className="mono">{short(p.wallet)}</span> },

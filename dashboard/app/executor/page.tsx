@@ -1,17 +1,20 @@
 "use client";
 import { useState } from "react";
-import { Err, Stat, Table } from "@/components/ui";
+import { Err, Seg, Stat, Table } from "@/components/ui";
 import { LiveFill, LivePosition, apiSend, useApi } from "@/lib/api";
 import { num, pnlClass, price, short, sol, time, usd } from "@/lib/format";
 
 type Exec = {
-  mode: string; kill_switch: boolean; fills: LiveFill[] | null; positions: LivePosition[] | null;
+  mode: string; view: string; kill_switch: boolean; fills: LiveFill[] | null; positions: LivePosition[] | null;
   day_realized_usd: number; daily_loss_limit_usd: number; max_open_positions: number; stop_loss_pct: number;
   size_usd: number; avg_gap_vs_sim_pct: number; gap_samples: number;
 };
 
 export default function ExecutorPage() {
-  const { data, error, reload } = useApi<Exec>("executor", 5000);
+  // "" = let the server pick (the mode the executor runs in); then the toggle overrides.
+  const [view, setView] = useState<"" | "paper" | "live">("");
+  const { data, error, reload } = useApi<Exec>(`executor${view ? `?mode=${view}` : ""}`, 5000);
+  const shown = (view || data?.view || "paper") as "paper" | "live";
   const [busy, setBusy] = useState(false);
   const open = (data?.positions ?? []).filter((p) => p.status === "open");
   const toggle = async () => {
@@ -27,20 +30,24 @@ export default function ExecutorPage() {
           <h2>Executor</h2>
           <div className="sub">Copies live wallets only. Mode is set by LIVE_TRADING in .env; PAPER fills use the live curve with no transaction sent.</div>
         </div>
-        <button className={`btn kill ${data?.kill_switch ? "on" : "danger"}`} disabled={busy || !data} onClick={toggle}>
-          {data?.kill_switch ? "KILL SWITCH ON (click to resume)" : "KILL SWITCH"}
-        </button>
+        <div className="row">
+          <Seg value={shown} onChange={setView} options={[{ v: "paper", label: "Paper results" }, { v: "live", label: "Live results" }]} />
+          <button className={`btn kill ${data?.kill_switch ? "on" : "danger"}`} disabled={busy || !data} onClick={toggle}>
+            {data?.kill_switch ? "KILL SWITCH ON (click to resume)" : "KILL SWITCH"}
+          </button>
+        </div>
       </div>
       <Err error={error} />
       <div className="grid stats">
-        <Stat label="Mode" value={data?.mode?.toUpperCase() ?? "-"} hint={`$${data?.size_usd ?? "-"} per trade`} />
-        <Stat label="Realized today" value={usd(data?.day_realized_usd, true)} tone={data?.day_realized_usd} hint={`limit -${usd(data?.daily_loss_limit_usd)}`} />
+        <Stat label="Executor running in" value={data?.mode?.toUpperCase() ?? "-"}
+          hint={`$${data?.size_usd ?? "-"} per trade · showing ${shown} results`} />
+        <Stat label={`Realized today (${shown})`} value={usd(data?.day_realized_usd, true)} tone={data?.day_realized_usd} hint={`limit -${usd(data?.daily_loss_limit_usd)}`} />
         <Stat label="Open positions" value={`${open.length} / ${data?.max_open_positions ?? "-"}`} hint={`stop-loss ${data?.stop_loss_pct ?? "-"}%`} />
         <Stat label="Avg gap vs sim" value={`${num(data?.avg_gap_vs_sim_pct, 2)}%`} hint={`${data?.gap_samples ?? 0} fills, positive = worse than simulated`} />
       </div>
       <div className="card" style={{ marginTop: 14 }}>
         <h3>Positions</h3>
-        <Table rows={data?.positions ?? []} rowKey={(p) => p.id} initialSort={{ key: "o", desc: true }} empty="No positions" cols={[
+        <Table rows={data?.positions ?? []} rowKey={(p) => p.id} initialSort={{ key: "o", desc: true }} empty={`No ${shown} positions`} cols={[
           { key: "o", label: "Opened", sort: (p) => p.opened_at, render: (p) => time(p.opened_at) },
           { key: "m", label: "Mode", render: (p) => <span className="badge">{p.mode}</span> },
           { key: "w", label: "Wallet", render: (p) => <span className="mono">{short(p.wallet)}</span> },
@@ -53,7 +60,7 @@ export default function ExecutorPage() {
       </div>
       <div className="card" style={{ marginTop: 14 }}>
         <h3>Fills vs simulation</h3>
-        <Table rows={data?.fills ?? []} rowKey={(f) => f.id} empty="No fills yet" cols={[
+        <Table rows={data?.fills ?? []} rowKey={(f) => f.id} empty={`No ${shown} fills yet`} cols={[
           { key: "t", label: "Sent", render: (f) => time(f.sent_at) },
           { key: "st", label: "Status", render: (f) => <span className={`badge ${f.status === "failed" ? "failed" : ""}`} title={f.error}>{f.status}</span> },
           { key: "side", label: "Side", render: (f) => `${f.side}${f.reason !== "copy" ? ` (${f.reason})` : ""}` },

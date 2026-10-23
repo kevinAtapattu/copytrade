@@ -201,6 +201,23 @@ func TestAPIOnReplayData(t *testing.T) {
 	if len(ex.Fills) == 0 || ex.GapSamples == 0 {
 		t.Errorf("executor fills %d gap samples %d", len(ex.Fills), ex.GapSamples)
 	}
+	var liveView struct {
+		Fills []model.LiveFill `json:"fills"`
+		View  string           `json:"view"`
+		Mode  string           `json:"mode"`
+	}
+	get("/api/executor?mode=live", &liveView)
+	if liveView.View != "live" || liveView.Mode != "paper" || len(liveView.Fills) != 0 {
+		t.Errorf("live view must exclude paper fills: view=%s mode=%s fills=%d", liveView.View, liveView.Mode, len(liveView.Fills))
+	}
+	var ovLive struct {
+		ExecEquity []any  `json:"exec_equity"`
+		ExecMode   string `json:"exec_mode"`
+	}
+	get("/api/overview?scope=all&mode=live", &ovLive)
+	if ovLive.ExecMode != "live" || len(ovLive.ExecEquity) != 0 {
+		t.Errorf("overview live view mixed in paper results: %+v", ovLive)
+	}
 	var h map[string]any
 	get("/api/health", &h)
 
