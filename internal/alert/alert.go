@@ -1,4 +1,4 @@
-// Package alert sends notifications to Telegram.
+// Package alert sends notifications to Discord and/or Telegram.
 package alert
 
 import (
@@ -14,6 +14,45 @@ import (
 	"copytrade/internal/model"
 )
 
+// Notifier is one alert destination.
+type Notifier interface {
+	Name() string
+	Enabled() bool
+	Send(ctx context.Context, text string) error
+}
+
+// Discord posts to a channel webhook.
+type Discord struct {
+	WebhookURL string
+	HTTP       *http.Client
+}
+
+func NewDiscord(url string) *Discord {
+	return &Discord{WebhookURL: url, HTTP: &http.Client{Timeout: 10 * time.Second}}
+}
+
+func (d *Discord) Name() string  { return "discord" }
+func (d *Discord) Enabled() bool { return d.WebhookURL != "" }
+
+func (d *Discord) Send(ctx context.Context, text string) error {
+	if len(text) > 1900 { // Discord caps content at 2000 chars
+		text = text[:1900] + "..."
+	}
+	body, _ := json.Marshal(map[string]any{"content": text, "allowed_mentions": map[string]any{"parse": []string{}}})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, d.WebhookURL, strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		return fmt.Errorf("discord %s: %s", resp.Status, b)
+	}
+	return nil
+}
+
 type Telegram struct {
 	Token  string
 	ChatID string
@@ -24,6 +63,8 @@ type Telegram struct {
 func NewTelegram(token, chat string) *Telegram {
 	return &Telegram{Token: token, ChatID: chat, HTTP: &http.Client{Timeout: 10 * time.Second}, Base: "https://api.telegram.org"}
 }
+
+func (t *Telegram) Name() string { return "telegram" }
 
 func (t *Telegram) Enabled() bool { return t.Token != "" && t.ChatID != "" }
 

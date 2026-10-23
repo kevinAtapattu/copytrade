@@ -73,8 +73,9 @@ type Config struct {
 	PumpPortalLocalFeePct float64
 
 	// Alerts
-	TelegramBotToken string
-	TelegramChatID   string
+	DiscordWebhookURL string
+	TelegramBotToken  string
+	TelegramChatID    string
 }
 
 // Load reads .env (searching up from the working directory) then the environment.
@@ -135,8 +136,9 @@ func Load() Config {
 		PumpPortalTradeURL:    str("PUMPPORTAL_TRADE_URL", "https://pumpportal.fun/api/trade-local"),
 		PumpPortalLocalFeePct: flt("PUMPPORTAL_LOCAL_FEE_PCT", 0.5),
 
-		TelegramBotToken: str("TELEGRAM_BOT_TOKEN", ""),
-		TelegramChatID:   str("TELEGRAM_CHAT_ID", ""),
+		DiscordWebhookURL: str("DISCORD_WEBHOOK_URL", ""),
+		TelegramBotToken:  str("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:    str("TELEGRAM_CHAT_ID", ""),
 	}
 }
 

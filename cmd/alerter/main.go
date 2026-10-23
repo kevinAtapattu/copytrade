@@ -1,4 +1,4 @@
-// Command alerter forwards trade, rotation, discovery and error events to Telegram.
+// Command alerter forwards trade, rotation, discovery and error events to Discord and/or Telegram.
 package main
 
 import (
@@ -17,16 +17,26 @@ import (
 func main() {
 	a := app.Start("alerter")
 	defer a.Close()
-	tg := alert.NewTelegram(a.Cfg.TelegramBotToken, a.Cfg.TelegramChatID)
-	if !tg.Enabled() {
-		slog.Warn("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set; alerts are logged only")
+	var targets []alert.Notifier
+	var names []string
+	for _, n := range []alert.Notifier{
+		alert.NewDiscord(a.Cfg.DiscordWebhookURL),
+		alert.NewTelegram(a.Cfg.TelegramBotToken, a.Cfg.TelegramChatID),
+	} {
+		if n.Enabled() {
+			targets = append(targets, n)
+			names = append(names, n.Name())
+		}
+	}
+	if len(targets) == 0 {
+		slog.Warn("no DISCORD_WEBHOOK_URL or TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID set; alerts are logged only")
 	}
 	var sent, dropped atomic.Int64
 	a.Heartbeat(30*time.Second, func() any {
-		return map[string]any{"telegram": tg.Enabled(), "sent": sent.Load(), "dropped": dropped.Load()}
+		return map[string]any{"targets": names, "sent": sent.Load(), "dropped": dropped.Load()}
 	})
 
-	// Queue + 1 msg/sec pacing keeps us under Telegram's per-chat limits.
+	// Queue + 1 msg/sec pacing keeps us under Discord/Telegram rate limits.
 	q := make(chan string, 100)
 	go func() {
 		for {
@@ -34,10 +44,12 @@ func main() {
 			case <-a.Ctx.Done():
 				return
 			case text := <-q:
-				if err := tg.Send(a.Ctx, text); err != nil {
-					slog.Warn("telegram send", "err", err)
-				} else {
-					sent.Add(1)
+				for _, n := range targets {
+					if err := n.Send(a.Ctx, text); err != nil {
+						slog.Warn("alert send", "to", n.Name(), "err", err)
+					} else {
+						sent.Add(1)
+					}
 				}
 				time.Sleep(time.Second)
 			}
@@ -54,7 +66,7 @@ func main() {
 			return nil
 		}
 		slog.Info("alert", "text", text)
-		if !tg.Enabled() {
+		if len(targets) == 0 {
 			return nil
 		}
 		select {

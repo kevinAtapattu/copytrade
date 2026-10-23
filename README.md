@@ -34,7 +34,7 @@ See `docs/PLAN.md` for phases, `docs/DECISIONS.md` for every judgment call, `CLA
         |                    Redis Stream "events" (fills, rotations, errors)
         |                         |                       |
    +----v----+   SSE + REST  +----v----+            +-----v----+
-   |   api   |<--------------| (hub)   |            | alerter  |--> Telegram
+   |   api   |<--------------| (hub)   |            | alerter  |--> Discord / Telegram
    +----+----+               +---------+            +----------+
         |
    +----v------+
@@ -155,6 +155,7 @@ Fill these in `.env` (copy from `.env.example`). Everything else has working def
 | `SOLANA_RPC_URL` | Live trading (sending and confirming txs) | Helius (helius.dev), Triton, or QuickNode free/paid tier. The public mainnet RPC rate-limits sends. |
 | `TRADER_PRIVATE_KEY` | Live trading only | Your **new, small** hot wallet's secret key: base58 export from Phantom/Solflare, or the JSON array from `solana-keygen new -o key.json`. Never your main wallet. |
 | `LIVE_TRADING` | Live trading only | Set to `true` only when you are ready (step 5 above). |
+| `DISCORD_WEBHOOK_URL` | Optional alerts | In Discord: a channel's settings (gear) > Integrations > Webhooks > New Webhook > Copy Webhook URL. Treat the URL like a password. |
 | `TELEGRAM_BOT_TOKEN` | Optional alerts | Message @BotFather on Telegram, `/newbot`. |
 | `TELEGRAM_CHAT_ID` | Optional alerts | Send your bot any message, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `chat.id`. |
 | `JITO_TIP_SOL` | Optional, faster landing | No key needed. Set e.g. `0.0001` to send through Jito's block engine with that tip. |
