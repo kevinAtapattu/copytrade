@@ -44,6 +44,9 @@ type Ingestor struct {
 	// Observer, if set, sees every new trade after IsTarget is known (snapshot mode
 	// uses it to schedule curve reads).
 	Observer func(model.Trade)
+	// Classify, if set, may adjust a tracked trade before it is stored or published
+	// (snapshot mode flags tokens our SOL math cannot price).
+	Classify func(context.Context, model.Trade) model.Trade
 
 	mu      sync.Mutex
 	tracked map[string]bool
@@ -177,6 +180,9 @@ func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 	}
 	in.mu.Unlock()
 
+	if in.Classify != nil && t.IsTarget {
+		t = in.Classify(ctx, t)
+	}
 	if in.Observer != nil {
 		in.Observer(t)
 	}

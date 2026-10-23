@@ -248,7 +248,7 @@ func (e *Engine) positionFor(s model.SimTrade, key posKey) *model.SimPosition {
 
 func (e *Engine) fillBuy(s *model.SimTrade, ms *mintState, pos *model.SimPosition, key posKey) {
 	if ms.migrated {
-		s.Skipped, s.SkipReason = true, "migrated off bonding curve"
+		s.Skipped, s.SkipReason = true, "not on a SOL bonding curve (migrated or non-SOL quote)"
 		return
 	}
 	if pos != nil {

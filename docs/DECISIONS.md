@@ -148,3 +148,12 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - Discovery uses its own RPC client at a quarter of `RPC_RPS` and a separate daily cap (`DISCOVERY_RPC_DAILY_MAX`, 5000 calls), so it can never starve ingest's price reads. A token whose fetch fails is retried on the next run.
 - Tokens remember their bonding curve address (migration `002`).
 - Unverified until it runs against mainnet: the `TradeEvent` byte layout (taken from pump.fun's IDL: mint, sol_amount, token_amount, is_buy, user, timestamp, virtual reserves) and the PDA derivation fallback. Both are only fallbacks or best-effort; a decode mismatch means discovery finds nothing, not wrong trades.
+
+## Verified on mainnet (`go run ./cmd/livecheck`, October 2026)
+- PumpPortal messages have the fields we parse (`signature, mint, traderPublicKey, txType, bondingCurveKey, vSolInBondingCurve, vTokensInBondingCurve, marketCapSol, pool`). Reserves are in SOL and UI tokens, and sit on the constant-product curve k = 30 x 1.073e9.
+- Bonding curve PDA derivation matched PumpPortal's `bondingCurveKey` on 6/6 tokens.
+- Curve account parsing matches the stream on SOL curves.
+- `TradeEvent` decoding works. The event appears both as "Program data:" in the logs and as an emit_cpi inner instruction (tag e445a52e51cb9a1d); the two are deduped.
+- **Non-SOL curves exist.** pump.fun now launches tokens priced in another token. Their curve account has a non-zero quote mint at bytes [83:115], and "vSol" is not SOL. On the first tracked buy of a mint, ingest does one curve read (`Classify`, cached per mint) and tags these trades `pool=nonsol`. The simulator and executor skip them like migrated tokens. PumpPortal still reported vSol=30 for such a token, so the message alone cannot tell.
+- **Transaction v1 exists.** RPC calls now request `maxSupportedTransactionVersion: 1`; with 0, those transactions error out. v1 has a different wire layout (version byte first), and our signer only handles legacy/v0. It refuses v1 with an error rather than mis-signing. If PumpPortal ever returns v1 transactions for trading, live sends fail safely and the signer needs v1 support.
+- The public RPC rate-limits `getTransaction` (429s). Discovery needs a real RPC key such as Helius free.

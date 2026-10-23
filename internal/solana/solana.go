@@ -92,6 +92,11 @@ func readShortVec(b []byte, off int) (int, int, error) {
 
 // ParseTx reads the signature slots, header, account keys and blockhash.
 func ParseTx(raw []byte) (*Tx, error) {
+	// Transaction v1 (seen on mainnet since 2026) starts with a version byte 0x81 and
+	// uses a different layout. We only sign legacy and v0; refuse rather than mis-sign.
+	if len(raw) > 0 && raw[0]&0x80 != 0 {
+		return nil, fmt.Errorf("unsupported transaction version %d (only legacy and v0 can be signed)", raw[0]&0x7f)
+	}
 	n, off, err := readShortVec(raw, 0)
 	if err != nil {
 		return nil, err
@@ -296,7 +301,7 @@ func (r *RPC) GetTxEvents(ctx context.Context, sig string) (TxEvents, error) {
 		} `json:"meta"`
 	}
 	err := r.call(ctx, "getTransaction", []any{sig, map[string]any{"encoding": "json", "commitment": "confirmed",
-		"maxSupportedTransactionVersion": 0}}, &tx)
+		"maxSupportedTransactionVersion": 1}}, &tx)
 	if err != nil {
 		return TxEvents{}, err
 	}
@@ -411,7 +416,7 @@ func (r *RPC) GetBalanceChange(ctx context.Context, sig, owner, mint string) (Ba
 		} `json:"transaction"`
 	}
 	err := r.call(ctx, "getTransaction", []any{sig, map[string]any{"encoding": "jsonParsed",
-		"commitment": "confirmed", "maxSupportedTransactionVersion": 0}}, &tx)
+		"commitment": "confirmed", "maxSupportedTransactionVersion": 1}}, &tx)
 	if err != nil {
 		return BalanceChange{}, err
 	}

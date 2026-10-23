@@ -36,6 +36,7 @@ func main() {
 		}
 		in.Tokens = snap
 		in.Observer = snap.OnTrade
+		in.Classify = snap.Classify
 		go func() {
 			t := time.NewTicker(250 * time.Millisecond)
 			defer t.Stop()

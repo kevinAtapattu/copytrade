@@ -124,3 +124,10 @@ func TestRateLimitAndCount(t *testing.T) {
 		t.Fatalf("calls %d %d", today, total)
 	}
 }
+
+func TestRefusesV1Transactions(t *testing.T) {
+	raw := append([]byte{0x81, 0x01, 0x00, 0x31}, make([]byte, 200)...)
+	if _, err := ParseTx(raw); err == nil {
+		t.Fatal("v1 transactions must be refused, not mis-signed")
+	}
+}

@@ -75,6 +75,7 @@ type Snapshotter struct {
 	SkipMarks func() bool
 
 	mu       sync.Mutex
+	quote    map[string]string // mint -> pool classification ("pump" or "nonsol")
 	keys     map[string]string // mint -> bonding curve address
 	watched  map[string]bool
 	pending  []req
@@ -86,7 +87,7 @@ type Snapshotter struct {
 
 func New(r Reader, b bus.Bus, st store.Store, delays []int, markEvery time.Duration) *Snapshotter {
 	return &Snapshotter{Reader: r, Bus: b, Store: st, Delays: delays, MarkEvery: markEvery,
-		keys: map[string]string{}, watched: map[string]bool{}}
+		keys: map[string]string{}, watched: map[string]bool{}, quote: map[string]string{}}
 }
 
 // OnTrade schedules fill-time reads for each tracked trade on the bonding curve.
@@ -241,10 +242,7 @@ func (s *Snapshotter) Tick(ctx context.Context, now time.Time) {
 }
 
 func (s *Snapshotter) publish(ctx context.Context, mint, key string, a curve.Account, at time.Time) {
-	pool := "pump"
-	if a.Complete {
-		pool = "migrated"
-	}
+	pool := poolOf(a)
 	t := model.Trade{
 		Signature: fmt.Sprintf("snap:%s:%d", mint, at.UnixNano()), Mint: mint, Side: SideSnapshot,
 		VSol: a.State.VSol, VTokens: a.State.VTokens, MarketCapSol: a.State.Price() * 1e9,
@@ -256,4 +254,65 @@ func (s *Snapshotter) publish(ctx context.Context, mint, key string, a curve.Acc
 	if err := bus.PublishJSON(ctx, s.Bus, bus.StreamTrades, t); err != nil {
 		slog.Warn("publish snapshot", "err", err)
 	}
+}
+
+// PoolNonSOL marks a bonding curve priced in a token other than SOL.
+const PoolNonSOL = "nonsol"
+
+func poolOf(a curve.Account) string {
+	switch {
+	case a.QuoteMint != "":
+		return PoolNonSOL
+	case a.Complete:
+		return "migrated"
+	}
+	return "pump"
+}
+
+// Classify reads a tracked trade's curve once per mint, before anything acts on
+// the trade, and flags tokens our SOL math cannot price (non-SOL quote) by setting
+// Pool. Fails open: on an RPC error the trade passes unchanged and the +2s read
+// will flag it.
+func (s *Snapshotter) Classify(ctx context.Context, t model.Trade) model.Trade {
+	if !t.IsTarget || (t.Pool != "" && t.Pool != "pump") {
+		return t
+	}
+	s.mu.Lock()
+	if p, ok := s.quote[t.Mint]; ok {
+		s.mu.Unlock()
+		if p == PoolNonSOL {
+			t.Pool = p
+		}
+		return t
+	}
+	key := t.BondingCurveKey
+	if key == "" {
+		key = s.keys[t.Mint]
+	}
+	s.mu.Unlock()
+	if key == "" {
+		var err error
+		if key, err = curve.DeriveBondingCurve(t.Mint); err != nil {
+			return t
+		}
+	}
+	res, err := s.Reader.Read(ctx, []string{key}, t.ReceivedAt)
+	s.mu.Lock()
+	s.reads++
+	s.mu.Unlock()
+	if err != nil || len(res) == 0 || !res[0].Found {
+		return t
+	}
+	p := "pump"
+	if res[0].Account.QuoteMint != "" {
+		p = PoolNonSOL
+	}
+	s.mu.Lock()
+	s.quote[t.Mint] = p
+	s.mu.Unlock()
+	if p == PoolNonSOL {
+		slog.Info("skipping non-SOL bonding curve", "mint", t.Mint, "quote", res[0].Account.QuoteMint)
+		t.Pool = p
+	}
+	return t
 }

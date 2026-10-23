@@ -169,7 +169,7 @@ func (e *Executor) buyBlockLocked(k string, t model.Trade) string {
 	case e.killed:
 		return "kill switch on"
 	case e.migrated[t.Mint]:
-		return "token migrated off curve"
+		return "not on a SOL bonding curve (migrated or non-SOL quote)"
 	case e.Risk.MaxOpenPositions > 0 && len(e.positions)+len(e.inflight) >= e.Risk.MaxOpenPositions:
 		return fmt.Sprintf("max open positions (%d)", e.Risk.MaxOpenPositions)
 	case e.Risk.DailyLossUSD > 0 && e.dayPnl <= -e.Risk.DailyLossUSD:

@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseAccount(t *testing.T) {
-	data := make([]byte, 8+5*8+1+32) // newer layouts append a creator pubkey
+	data := make([]byte, 166) // mainnet size: base fields, creator, flags, quote mint, ...
 	put := func(i int, v uint64) { binary.LittleEndian.PutUint64(data[8+8*i:], v) }
 	put(0, 1_073_000_000_000_000) // virtual tokens, 6 decimals
 	put(1, 30_000_000_000)        // virtual SOL, lamports
@@ -23,6 +23,13 @@ func TestParseAccount(t *testing.T) {
 	data[48] = 1
 	if a, _ := ParseAccount(data); !a.Complete {
 		t.Fatal("complete flag")
+	}
+	if a.QuoteMint != "" {
+		t.Fatal("zero quote mint means SOL")
+	}
+	data[83] = 7
+	if a, _ := ParseAccount(data); a.QuoteMint == "" {
+		t.Fatal("non-zero quote mint must be reported")
 	}
 	if _, err := ParseAccount(data[:40]); err == nil {
 		t.Fatal("short data must fail")

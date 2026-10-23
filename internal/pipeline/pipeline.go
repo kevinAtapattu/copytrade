@@ -63,6 +63,7 @@ func Run(ctx context.Context, c config.Config, st store.Store, src *source.Repla
 		snap = snapshot.New(snapshot.NewHistoryReader(src.Trades()), b, st, model.Delays, c.MarkInterval)
 		in.Tokens = snap
 		in.Observer = snap.OnTrade
+		in.Classify = snap.Classify
 	}
 	eng := sim.New(sim.Params{SizeUSD: c.CopySizeUSD, Delays: model.Delays, Fees: sim.FeesFrom(c)}, st, px)
 	ex := exec.New(exec.Paper{Fees: curve.Fees{PumpPct: c.PumpFeePct, BotPct: c.PumpPortalLocalFeePct,

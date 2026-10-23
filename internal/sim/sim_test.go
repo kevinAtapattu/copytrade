@@ -174,7 +174,7 @@ func TestSkips(t *testing.T) {
 	e.HandleTrade(ctx, mig)
 	e.Flush(ctx)
 	for _, x := range must(st.SimTradesForTarget(ctx, "mig")) {
-		if !x.Skipped || x.SkipReason != "migrated off bonding curve" {
+		if !x.Skipped || x.SkipReason != "not on a SOL bonding curve (migrated or non-SOL quote)" {
 			t.Fatalf("migrated buy should be skipped: %+v", x)
 		}
 	}

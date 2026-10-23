@@ -18,6 +18,9 @@ type Account struct {
 	RealTokens float64
 	RealSol    float64
 	Complete   bool // true once the curve has migrated
+	// QuoteMint is set when the curve is priced in a token other than SOL (pump.fun
+	// started launching these in 2026). Our SOL math does not apply to them.
+	QuoteMint string
 }
 
 // ParseAccount decodes BondingCurve account data:
@@ -34,6 +37,17 @@ func ParseAccount(data []byte) (Account, error) {
 		RealTokens: u(2) / 1e6,
 		RealSol:    u(3) / 1e9,
 		Complete:   data[48] != 0,
+	}
+	// Layout after complete: creator pubkey [49:81], two flag bytes [81:83], then the
+	// quote mint [83:115] (all zero for SOL). Observed on mainnet, October 2026.
+	if len(data) >= 115 {
+		q := data[83:115]
+		for _, c := range q {
+			if c != 0 {
+				a.QuoteMint = base58.Encode(q)
+				break
+			}
+		}
 	}
 	return a, nil
 }
