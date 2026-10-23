@@ -22,8 +22,8 @@ PumpPortal / Helius stream
 - [ ] run 24/7 on VPS
 
 ## Phase 2: Scoring + discovery
-- [ ] rolling 14/30-day copyability score per wallet
-- [ ] one-lucky-trade check, drawdown, hold time, trades/day
+- [x] rolling 14/30-day copyability score per wallet
+- [x] one-lucky-trade check, drawdown, hold time, trades/day
 - [ ] discovery job for early buyers of 5x tokens
 - [ ] auto-drop inactive/bad wallets
 

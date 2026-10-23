@@ -37,3 +37,23 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - Our simulated buys are not applied to the curve state. Each delay is an independent what-if, so the three delays do not distort each other.
 - Tokens that leave the bonding curve (`pool` other than `pump`) are not simulated for new buys. An open position on a migrated token is sold at the last known curve state and marked `migrated`.
 - Open positions are restored from the DB on restart. Fills pending at the moment of a restart (60s max) are lost. That is acceptable for research data.
+
+## Scorer + rotation
+- Scores are computed per wallet, per delay (2/10/60s), per window (14/30 days, by position open time), every `SCORE_INTERVAL` (5 min). Each run is stored as a snapshot, so history is kept.
+- Closed positions count realized PnL. Open positions are marked by selling the remaining tokens into the token's last known curve state, fees included. A wallet that never sells its losers therefore still shows the loss.
+- PnL is in USD at the SOL/USD rate when the position opened, so SOL price moves do not leak into wallet skill.
+- Max drawdown is the peak-to-trough drop of `BANKROLL_USD` ($500) + cumulative PnL, ordered by close time (open positions at now).
+- One lucky trade: `pnl_ex_best = pnl - best trade`. `lucky_trade` is true when the total is positive only because of the best trade.
+- `score` = ROI% on deployed capital with the best trade removed, scaled down by `(1 - drawdown)` when positive. Fewer than 3 positions scores 0.
+- Rules judge the +2s delay (`ROTATION_DELAY_S`):
+  - Demote live to bench when the 14d PnL is < 0, the 14d score is < 0, or drawdown >= 25%.
+  - Promote bench to live only if all of these hold:
+    - 14+ days of sim history
+    - >= `PROMOTE_MIN_TRADES` (10) positions in 14d
+    - 14d and 30d PnL > 0
+    - PnL still positive ex-best-trade
+    - score > 0
+    - drawdown < 25%
+  - The best scores fill free slots, up to `LIVE_MAX` (3).
+- "Positive for 2+ weeks" is read as positive over both the rolling 14d and 30d windows, with at least 14 days of history. That is less brittle than requiring every daily snapshot to be positive.
+- Every status change goes to the `rotations` table and the events stream, which feeds the dashboard and Telegram.
