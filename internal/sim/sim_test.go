@@ -204,3 +204,33 @@ func near(a, b float64) bool {
 	}
 	return d <= 1e-9*max(1, m)
 }
+
+func TestTickWallUsesStreamTimeDuringBacklog(t *testing.T) {
+	e, st := newEngine()
+	ctx := context.Background()
+	wall := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC) // wall clock far ahead of the data
+	e.Wall = func() time.Time { return wall }
+	s := newStream()
+	buy := s.trade("W", model.SideBuy, 1, 0, true, 30e6)
+	s.trade("X", model.SideBuy, 2, 5*time.Second, false, 0)
+	at5 := s.st
+	s.trade("Y", model.SideBuy, 3, 20*time.Second, false, 0)
+
+	e.HandleTrade(ctx, s.out[0])
+	e.TickWall(ctx) // backlog: wall time has not moved since the last trade was read
+	if e.PendingCount() != 3 {
+		t.Fatalf("finalized early during backlog: pending %d", e.PendingCount())
+	}
+	e.HandleTrade(ctx, s.out[1])
+	e.HandleTrade(ctx, s.out[2])
+	wall = wall.Add(2 * time.Minute) // stream goes idle
+	e.TickWall(ctx)
+	if e.PendingCount() != 0 {
+		t.Fatalf("idle stream should finalize: pending %d", e.PendingCount())
+	}
+	for _, x := range must(st.SimTradesForTarget(ctx, buy.Signature)) {
+		if x.DelayS == 10 && !near(x.SpotPrice, at5.Price()) {
+			t.Fatal("+10s fill should see the trade at +5s")
+		}
+	}
+}

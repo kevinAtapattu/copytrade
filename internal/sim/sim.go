@@ -41,11 +41,15 @@ type Engine struct {
 	Store store.Store
 	Price price.Source
 	Sink  Sink
+	// Wall is the wall clock used by TickWall (overridable in tests).
+	Wall func() time.Time
 
 	mu        sync.Mutex
 	mints     map[string]*mintState
 	positions map[posKey]*model.SimPosition
 	pending   map[string][]pending // by mint, sorted by due
+	lastEvent time.Time            // received_at of the newest processed trade
+	lastWall  time.Time            // wall time when it was processed
 }
 
 type mintState struct {
@@ -70,7 +74,7 @@ func New(p Params, st store.Store, ps price.Source) *Engine {
 		p.Delays = model.Delays
 	}
 	return &Engine{
-		P: p, Store: st, Price: ps,
+		P: p, Store: st, Price: ps, Wall: time.Now,
 		mints: map[string]*mintState{}, positions: map[posKey]*model.SimPosition{}, pending: map[string][]pending{},
 	}
 }
@@ -94,6 +98,10 @@ func (e *Engine) LoadOpen(ctx context.Context) error {
 func (e *Engine) HandleTrade(ctx context.Context, t model.Trade) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if t.ReceivedAt.After(e.lastEvent) {
+		e.lastEvent = t.ReceivedAt
+	}
+	e.lastWall = e.Wall()
 
 	// 1. Fills due strictly before this trade see the state before it.
 	e.finalizeMint(ctx, t.Mint, func(p pending) bool { return p.due.Before(t.ReceivedAt) })
@@ -129,6 +137,26 @@ func (e *Engine) Tick(ctx context.Context, now time.Time) {
 	cut := now.Add(-e.P.Grace)
 	for mint := range e.pending {
 		e.finalizeMint(ctx, mint, func(p pending) bool { return !p.due.After(cut) })
+	}
+}
+
+// EventNow is the stream's notion of now: the newest processed received_at plus
+// wall time elapsed since it was processed. While working through a backlog this
+// stays at stream time (so fills are never finalized before the trades that
+// should price them are read); when the stream is idle it advances with the clock.
+func (e *Engine) EventNow() time.Time {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lastEvent.IsZero() {
+		return time.Time{}
+	}
+	return e.lastEvent.Add(e.Wall().Sub(e.lastWall))
+}
+
+// TickWall runs Tick at EventNow. Use this in production instead of Tick(time.Now()).
+func (e *Engine) TickWall(ctx context.Context) {
+	if now := e.EventNow(); !now.IsZero() {
+		e.Tick(ctx, now)
 	}
 }
 

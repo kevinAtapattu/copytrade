@@ -16,6 +16,7 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - One goroutine owns the websocket and does every write. Subscribe/unsubscribe calls only update the desired sets and queue a command, so callers never block and never touch the socket.
 - After any reconnect, all account and token subscriptions are re-sent in batches of 100.
 - Backoff starts at 5s, doubles to 10 min, with jitter. A session that lasted 2+ min resets it. An error mentioning "ban" waits 1 hour, since bans expire hourly. Compose pins `replicas: 1`.
+- On startup, ingest re-subscribes tokens that tracked wallets still held at their last seen trade (within `TOKEN_MAX_WATCH`), so a restart does not orphan open positions.
 - Without `PUMPPORTAL_API_KEY`, ingest stays idle instead of connecting (the metered streams need a key) and health shows why.
 - Tracked wallets = every wallet that is not `dropped` (live + bench).
 - A token is subscribed when a tracked wallet buys it (or partially sells one we were not watching). It is unsubscribed once every tracked holder's `newTokenBalance` drops under 1 token, plus a cooldown (default 5 min, never below 90s so the +60s sim can fill), or after `TOKEN_MAX_WATCH` (24h) to cap metered usage.
@@ -23,7 +24,7 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - The PumpPortal SOL usage estimate is metered messages / 10,000 * 0.01 SOL.
 
 ## Simulator
-- Event time, not sleeps. A fill due at T+d uses the curve state after the last trade at or before T+d. It is finalized when a later trade on that mint arrives, or by a 1s ticker once T+d+3s has passed (3s of grace for late frames). Replay finalizes from event time, then flushes at the end.
+- Event time, not sleeps. A fill due at T+d uses the curve state after the last trade at or before T+d. It is finalized when a later trade on that mint arrives, or by a 1s ticker once T+d+3s has passed (3s of grace for late frames). The ticker's clock is stream time: the newest processed `received_at` plus wall time since it was processed. During a backlog (restart, Redis lag) it stays at stream time, so fills are never finalized before the trades that should price them have been read. When idle, it advances with the wall clock. Replay finalizes from event time, then flushes at the end.
 - The target's own trade carries post-trade reserves, so it seeds the curve state. That covers the gap before our token subscription is live: if nobody trades before T+d, we fill at the target's post-trade price.
 - Curve math is constant product on PumpPortal's virtual reserves. Buys that would push virtual tokens below 279.9M (curve complete) are skipped.
 - Fees, all configurable:
@@ -87,7 +88,11 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - Paper fills hit the curve state at the moment the target trade arrives. They pay the same fees a live trade would: pump.fun 1.25% + PumpPortal local API 0.5% + base fee + priority fee (+ Jito tip if set).
 - Live trades go through PumpPortal `trade-local`. The tx is signed locally with stdlib ed25519 (a small hand-rolled wire-format parser for legacy and v0 messages, no big Solana SDK) and sent through `SOLANA_RPC_URL` with `skipPreflight` and `maxRetries: 0`.
 - With `JITO_TIP_SOL > 0`, the request uses the bundle form (an array body, where the first tx's priorityFee is the tip) and goes to the Jito block engine via `sendBundle`.
-- Retries rebuild the tx from PumpPortal, which brings a fresh blockhash. A retry is sent only after the previous tx failed on-chain or its blockhash stopped being valid without the tx landing. That rules out double buys. A tx that landed but can't be read is not retried.
+- Retries rebuild the tx from PumpPortal, which brings a fresh blockhash. A retry is sent only when one of these holds:
+  - the node returned a definite JSON-RPC rejection,
+  - the previous tx failed on-chain,
+  - or its blockhash stopped being valid without the tx landing.
+  On a transport error (timeout, dropped connection), the tx may have been forwarded anyway, so we wait for it to land or expire before rebuilding. A tx that landed but can't be read is not retried.
 - Real fills are read from `getTransaction` balance deltas: SOL change (including the network fee) and the token balance change for our wallet.
 - Sells use PumpPortal's percentage form (`"37.50%"`), so we mirror the target's percentage of our actual on-chain balance.
 - Risk controls:
@@ -97,7 +102,8 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
   - Daily loss limit: UTC-day realized PnL at or below `-DAILY_LOSS_LIMIT_USD` blocks new buys.
   - Kill switch (dashboard, stored in `settings`, polled every 5s) blocks new buys. Exits and stop-losses still run, so you are never stuck in a position.
 - Blocked buys are recorded as `rejected` fills with the reason, so the dashboard shows what was skipped and why.
-- Target trades older than 30s when consumed (backlog after a restart) are not copied.
+- Target BUYS older than 30s when consumed (backlog after a restart) are not copied. Stale SELLS still go through, so we exit positions the target exited while we were down.
+- Live requests use `pool: "auto"`, so sells still work after a token migrates off the bonding curve. These are exactly the winners. Stop-loss can't price a migrated token (no curve reserves in the stream), but copy sells still exit it.
 - Each (wallet, token) gets its own ordered worker goroutine. A slow live tx never blocks the stream, and a sell can't overtake its buy.
 - The live-vs-sim gap: the API joins each executor fill to the simulator's fill for the same target trade at +2s. The dashboard shows the price gap per fill and on average.
 

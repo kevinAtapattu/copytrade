@@ -157,6 +157,17 @@ type RPC struct {
 
 func NewRPC(url string) *RPC { return &RPC{URL: url, Client: &http.Client{Timeout: 20 * time.Second}} }
 
+// RPCError is a definite JSON-RPC error response (as opposed to a transport failure).
+type RPCError struct {
+	Method  string
+	Code    int
+	Message string
+}
+
+func (e *RPCError) Error() string {
+	return fmt.Sprintf("%s: rpc error %d: %s", e.Method, e.Code, e.Message)
+}
+
 type rpcErr struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -186,7 +197,7 @@ func postJSONRPC(ctx context.Context, c *http.Client, url, method string, params
 		return fmt.Errorf("%s: decode (%s): %w", method, resp.Status, err)
 	}
 	if env.Error != nil {
-		return fmt.Errorf("%s: rpc error %d: %s", method, env.Error.Code, env.Error.Message)
+		return &RPCError{Method: method, Code: env.Error.Code, Message: env.Error.Message}
 	}
 	if out != nil {
 		return json.Unmarshal(env.Result, out)

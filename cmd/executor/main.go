@@ -56,8 +56,9 @@ func main() {
 		if err := json.Unmarshal(b, &t); err != nil {
 			return err
 		}
-		// Never act on stale trades (e.g. backlog after a restart).
-		if time.Since(t.ReceivedAt) > 30*time.Second && t.IsTarget {
+		// Never open positions on stale buys (e.g. backlog after a restart). Stale
+		// sells still go through so we never stay stuck in a position the target exited.
+		if t.IsTarget && t.Side == model.SideBuy && time.Since(t.ReceivedAt) > 30*time.Second {
 			t.IsTarget = false
 		}
 		ex.HandleTrade(ctx, t)

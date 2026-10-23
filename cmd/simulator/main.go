@@ -43,8 +43,8 @@ func main() {
 			select {
 			case <-a.Ctx.Done():
 				return
-			case now := <-t.C:
-				eng.Tick(a.Ctx, now)
+			case <-t.C:
+				eng.TickWall(a.Ctx)
 			}
 		}
 	}()

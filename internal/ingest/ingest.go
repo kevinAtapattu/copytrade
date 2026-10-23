@@ -89,6 +89,48 @@ func (in *Ingestor) ReloadWallets(ctx context.Context) error {
 	return nil
 }
 
+// RestoreWatches re-subscribes tokens that tracked wallets still held when we last
+// saw them (within MaxWatch), so a restart does not orphan open positions.
+func (in *Ingestor) RestoreWatches(ctx context.Context, now time.Time) error {
+	in.mu.Lock()
+	wallets := make([]string, 0, len(in.tracked))
+	for w := range in.tracked {
+		wallets = append(wallets, w)
+	}
+	in.mu.Unlock()
+	var mints []string
+	for _, w := range wallets {
+		trades, err := in.Store.ListTargetTrades(ctx, store.TradeFilter{Wallet: w, Since: now.Add(-in.MaxWatch)})
+		if err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for _, t := range trades { // newest first: the first row per mint is the latest balance
+			if seen[t.Mint] {
+				continue
+			}
+			seen[t.Mint] = true
+			if t.NewTokenBalance <= Dust {
+				continue
+			}
+			in.mu.Lock()
+			wt, ok := in.watch[t.Mint]
+			if !ok {
+				wt = &watch{since: t.ReceivedAt, holders: map[string]float64{}}
+				in.watch[t.Mint] = wt
+				mints = append(mints, t.Mint)
+			}
+			wt.holders[w] = t.NewTokenBalance
+			in.mu.Unlock()
+		}
+	}
+	if len(mints) > 0 {
+		in.Src.SubscribeTokens(mints)
+		slog.Info("restored token subscriptions", "n", len(mints))
+	}
+	return nil
+}
+
 // HandleTrade is the source callback.
 func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 	in.mu.Lock()
@@ -195,6 +237,9 @@ func (in *Ingestor) MsgsPerSec(now time.Time) float64 {
 func (in *Ingestor) Run(ctx context.Context, reload time.Duration) error {
 	if err := in.ReloadWallets(ctx); err != nil {
 		slog.Warn("initial wallet load", "err", err)
+	}
+	if err := in.RestoreWatches(ctx, time.Now()); err != nil {
+		slog.Warn("restore token watches", "err", err)
 	}
 	go func() {
 		rt := time.NewTicker(reload)

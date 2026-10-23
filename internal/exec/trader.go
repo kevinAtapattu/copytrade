@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -97,7 +98,7 @@ type tradeReq struct {
 
 func (l *Live) request(o Order) tradeReq {
 	r := tradeReq{PublicKey: l.Key.PublicBase58(), Action: o.Side, Mint: o.Mint, Slippage: l.SlippagePct,
-		PriorityFee: l.PriorityFee, Pool: "pump"}
+		PriorityFee: l.PriorityFee, Pool: "auto"} // auto: still works after the token migrates off the curve
 	if o.Side == "buy" {
 		r.Amount, r.DenominatedInSol = round(o.SolIn, 6), "true"
 	} else {
@@ -186,7 +187,13 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 	}
 	sig := tx.Signature()
 	if err := l.send(ctx, tx); err != nil {
-		return Result{Signature: sig}, err
+		var rej *solana.RPCError
+		if errors.As(err, &rej) {
+			return Result{Signature: sig}, err // node definitely rejected it: safe to rebuild now
+		}
+		// Transport error: the tx may still have been forwarded. Wait until it
+		// lands or its blockhash expires before allowing a retry.
+		slog.Warn("send failed, waiting for landing or expiry before retry", "sig", sig, "err", err)
 	}
 	landed, err := l.confirm(ctx, sig, tx.BlockhashBase58())
 	if err != nil {
@@ -212,7 +219,11 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 // confirm polls until the tx is confirmed (true), failed on-chain (error), or
 // its blockhash is no longer valid and it never landed (false).
 func (l *Live) confirm(ctx context.Context, sig, blockhash string) (bool, error) {
-	deadline := time.Now().Add(max(l.ConfirmWait, 30*time.Second))
+	wait := l.ConfirmWait
+	if wait <= 0 {
+		wait = 30 * time.Second
+	}
+	deadline := time.Now().Add(wait)
 	for {
 		st, err := l.RPC.SignatureStatus(ctx, sig)
 		if err == nil && st.Found {

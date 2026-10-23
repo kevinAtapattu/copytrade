@@ -121,3 +121,22 @@ func TestDroppedWalletUnsubscribed(t *testing.T) {
 }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+func TestRestoreWatchesAfterRestart(t *testing.T) {
+	in, _, st, _ := setup(t)
+	ctx := context.Background()
+	in.HandleTrade(ctx, tr("a", "W1", "buy", 100, 0))
+	in.HandleTrade(ctx, model.Trade{Signature: "b", Mint: "M2", Trader: "W1", Side: "buy", NewTokenBalance: 50, ReceivedAt: t0})
+	in.HandleTrade(ctx, model.Trade{Signature: "c", Mint: "M2", Trader: "W1", Side: "sell", NewTokenBalance: 0, ReceivedAt: t0.Add(time.Minute)})
+
+	// new process, same DB
+	src2 := &fakeSrc{}
+	in2 := New(src2, st, bus.NewMemory(), time.Minute, 24*time.Hour)
+	in2.ReloadWallets(ctx)
+	if err := in2.RestoreWatches(ctx, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if len(src2.subT) != 1 || len(src2.subT[0]) != 1 || src2.subT[0][0] != "M" || !in2.IsWatching("M") || in2.IsWatching("M2") {
+		t.Fatalf("restored %v", src2.subT)
+	}
+}

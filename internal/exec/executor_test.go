@@ -205,7 +205,7 @@ func TestLiveTraderBuildSignSendConfirm(t *testing.T) {
 	if res.Tokens != 4_500_000 || res.SolAmount < 0.1669 || res.SolAmount > 0.1671 || res.Signature != sentSig || res.Attempts != 1 {
 		t.Fatalf("result %+v", res)
 	}
-	if reqBody["action"] != "buy" || reqBody["denominatedInSol"] != "true" || reqBody["publicKey"] != owner || reqBody["pool"] != "pump" {
+	if reqBody["action"] != "buy" || reqBody["denominatedInSol"] != "true" || reqBody["publicKey"] != owner || reqBody["pool"] != "auto" {
 		t.Fatalf("trade-local request %+v", reqBody)
 	}
 	if builds.Load() != 1 || sends.Load() != 1 {
@@ -245,5 +245,47 @@ func TestLiveRetriesOnOnchainFailure(t *testing.T) {
 	_, err := l.Execute(context.Background(), Order{Mint: "M", Side: "buy", SolIn: 0.1})
 	if err == nil || !strings.Contains(err.Error(), "failed on-chain") || builds.Load() != 3 {
 		t.Fatalf("err %v builds %d (want 3 fresh builds)", err, builds.Load())
+	}
+}
+
+func TestLiveTransportErrorWaitsForExpiryBeforeRetry(t *testing.T) {
+	pk := ed25519.NewKeyFromSeed(make([]byte, 32))
+	kp, _ := solana.ParseKeypair(base58.Encode(pk))
+	var builds, validChecks atomic.Int32
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		builds.Add(1)
+		w.Write(unsignedTx(kp.Public))
+	}))
+	defer pp.Close()
+	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Method string }
+		json.NewDecoder(r.Body).Decode(&req)
+		var res any
+		switch req.Method {
+		case "sendTransaction":
+			// transport failure: hang up without a JSON-RPC answer
+			hj, _ := w.(http.Hijacker)
+			c, _, _ := hj.Hijack()
+			c.Close()
+			return
+		case "getSignatureStatuses":
+			res = map[string]any{"value": []any{nil}} // never lands
+		case "isBlockhashValid":
+			// valid for the first two checks, then expired
+			res = map[string]any{"value": validChecks.Add(1) <= 2}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": res})
+	}))
+	defer rpc.Close()
+	l := &Live{Key: kp, RPC: solana.NewRPC(rpc.URL), TradeURL: pp.URL, MaxAttempts: 2, HTTP: http.DefaultClient,
+		ConfirmWait: 50 * time.Millisecond}
+	_, err := l.Execute(context.Background(), Order{Mint: "M", Side: "buy", SolIn: 0.1})
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	// First attempt must wait until the blockhash expired (2 valid checks) before the
+	// second build; a naive retry would rebuild immediately.
+	if builds.Load() != 2 || validChecks.Load() < 3 {
+		t.Fatalf("builds %d, blockhash checks %d", builds.Load(), validChecks.Load())
 	}
 }
