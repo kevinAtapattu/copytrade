@@ -14,11 +14,11 @@ PumpPortal / Helius stream
 ```
 
 ## Phase 1: Collector
-- [ ] Go module, docker-compose (Postgres, Redis)
-- [ ] Postgres schema: wallets, target_trades, token_trades, sim_trades
-- [ ] ingest: single PumpPortal ws, subscribe to wallets, auto-subscribe to their tokens
+- [x] Go module, docker-compose (Postgres, Redis)
+- [x] Postgres schema: wallets, target_trades, token_trades, sim_trades
+- [x] ingest: single PumpPortal ws, subscribe to wallets, auto-subscribe to their tokens
 - [ ] simulator: $25 entries/exits at +2s/+10s/+60s with fees + slippage
-- [ ] wallets loaded from wallets.txt
+- [x] wallets loaded from wallets.txt
 - [ ] run 24/7 on VPS
 
 ## Phase 2: Scoring + discovery
