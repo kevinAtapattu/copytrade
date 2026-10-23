@@ -86,9 +86,25 @@ func FindHits(tok model.Token, trades []model.Trade, tracked map[string]bool, c 
 	return hits
 }
 
+// History supplies a token's trades for discovery. Stream mode reads what we
+// stored; snapshot mode fetches the token's early history from the chain.
+type History interface {
+	TokenTrades(ctx context.Context, tok model.Token) ([]model.Trade, error)
+}
+
+// StoreHistory serves trades we stored from the stream.
+type StoreHistory struct{ Store store.Store }
+
+func (h StoreHistory) TokenTrades(ctx context.Context, tok model.Token) ([]model.Trade, error) {
+	return h.Store.ListTokenTrades(ctx, store.TradeFilter{Mint: tok.Mint})
+}
+
 // Discover scans 5x+ tokens, records hits, adds repeat names to the bench, then
-// prunes inactive/bad/over-cap bench wallets.
-func Discover(ctx context.Context, st store.Store, b bus.Bus, c config.Config, now time.Time) (DiscoveryResult, error) {
+// prunes inactive/bad/over-cap bench wallets. hist nil means StoreHistory.
+func Discover(ctx context.Context, st store.Store, b bus.Bus, c config.Config, now time.Time, hist History) (DiscoveryResult, error) {
+	if hist == nil {
+		hist = StoreHistory{st}
+	}
 	var res DiscoveryResult
 	wallets, err := st.ListWallets(ctx)
 	if err != nil {
@@ -107,12 +123,22 @@ func Discover(ctx context.Context, st store.Store, b bus.Bus, c config.Config, n
 		return res, err
 	}
 	for _, tok := range toks {
-		trades, err := st.ListTokenTrades(ctx, store.TradeFilter{Mint: tok.Mint})
+		trades, err := hist.TokenTrades(ctx, tok)
 		if err != nil {
-			return res, err
+			// Leave the token unscanned so the next run retries it.
+			slog.Warn("token history", "mint", tok.Mint, "err", err)
+			continue
 		}
 		res.TokensScanned++
-		for _, h := range FindHits(tok, trades, tracked, c, now) {
+		// "Early" is judged against the earliest price we have: launch for chain
+		// history, our first observation for stored stream data.
+		eff := tok
+		for _, t := range trades {
+			if p := tradePrice(t); p > 0 && (eff.FirstPrice <= 0 || p < eff.FirstPrice) && !t.ReceivedAt.After(tok.FirstSeen) {
+				eff.FirstPrice = p
+			}
+		}
+		for _, h := range FindHits(eff, trades, tracked, c, now) {
 			ok, err := st.InsertDiscoveryHit(ctx, h)
 			if err != nil {
 				return res, err

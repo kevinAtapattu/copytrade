@@ -1,0 +1,208 @@
+// Package history fetches a token's past trades straight from the chain, by
+// decoding pump.fun's own TradeEvent from each transaction. Discovery uses it in
+// snapshot mode, where we no longer stream every trade.
+package history
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/mr-tron/base58"
+
+	"copytrade/internal/curve"
+	"copytrade/internal/model"
+	"copytrade/internal/solana"
+)
+
+var tradeEventDisc = func() []byte {
+	h := sha256.Sum256([]byte("event:TradeEvent"))
+	return h[:8]
+}()
+
+// Event is a decoded pump.fun TradeEvent.
+type Event struct {
+	Mint        string
+	SolAmount   float64
+	TokenAmount float64
+	IsBuy       bool
+	User        string
+	Timestamp   int64
+	VSol        float64
+	VTokens     float64
+}
+
+const eventLen = 32 + 8 + 8 + 1 + 32 + 8 + 8 + 8 // fields we read; newer versions append more
+
+// DecodeEvent decodes a TradeEvent body that starts right after the 8-byte discriminator.
+func DecodeEvent(b []byte) (Event, error) {
+	if len(b) < eventLen {
+		return Event{}, errors.New("trade event too short")
+	}
+	u := func(o int) uint64 { return binary.LittleEndian.Uint64(b[o:]) }
+	return Event{
+		Mint:        base58.Encode(b[0:32]),
+		SolAmount:   float64(u(32)) / 1e9,
+		TokenAmount: float64(u(40)) / 1e6,
+		IsBuy:       b[48] != 0,
+		User:        base58.Encode(b[49:81]),
+		Timestamp:   int64(u(81)),
+		VSol:        float64(u(89)) / 1e9,
+		VTokens:     float64(u(97)) / 1e6,
+	}, nil
+}
+
+// EncodeEvent is the inverse of DecodeEvent including the discriminator (tests, fixtures).
+func EncodeEvent(e Event) []byte {
+	b := make([]byte, 8+eventLen)
+	copy(b, tradeEventDisc)
+	m, _ := base58.Decode(e.Mint)
+	copy(b[8:40], m)
+	binary.LittleEndian.PutUint64(b[40:], uint64(e.SolAmount*1e9+0.5))
+	binary.LittleEndian.PutUint64(b[48:], uint64(e.TokenAmount*1e6+0.5))
+	if e.IsBuy {
+		b[56] = 1
+	}
+	u, _ := base58.Decode(e.User)
+	copy(b[57:89], u)
+	binary.LittleEndian.PutUint64(b[89:], uint64(e.Timestamp))
+	binary.LittleEndian.PutUint64(b[97:], uint64(e.VSol*1e9+0.5))
+	binary.LittleEndian.PutUint64(b[105:], uint64(e.VTokens*1e6+0.5))
+	return b
+}
+
+// EventsFromTx finds TradeEvents in program logs ("Program data: <base64>") and in
+// inner instructions (Anchor emit_cpi: 8-byte event tag + discriminator + body).
+func EventsFromTx(tx solana.TxEvents) []Event {
+	var blobs [][]byte
+	for _, l := range tx.Logs {
+		if rest, ok := strings.CutPrefix(l, "Program data: "); ok {
+			if b, err := base64.StdEncoding.DecodeString(rest); err == nil {
+				blobs = append(blobs, b)
+			}
+		}
+	}
+	blobs = append(blobs, tx.InnerData...)
+	var out []Event
+	seen := map[string]bool{}
+	for _, b := range blobs {
+		for _, off := range []int{0, 8} {
+			if len(b) < off+8 || string(b[off:off+8]) != string(tradeEventDisc) {
+				continue
+			}
+			ev, err := DecodeEvent(b[off+8:])
+			if err != nil {
+				continue
+			}
+			k := fmt.Sprintf("%s|%v|%v|%v|%d", ev.User, ev.SolAmount, ev.TokenAmount, ev.IsBuy, ev.Timestamp)
+			if !seen[k] { // the same event can appear in both logs and inner instructions
+				seen[k] = true
+				out = append(out, ev)
+			}
+		}
+	}
+	return out
+}
+
+// Fetcher pulls a token's earliest trades from its bonding curve's history.
+type Fetcher struct {
+	RPC      *solana.RPC
+	MaxPages int // getSignaturesForAddress pages of 1000 to walk back (cost: 1 call each)
+	MaxTx    int // earliest transactions to decode (cost: 1 call each)
+}
+
+// TokenTrades returns up to MaxTx of the token's earliest trades, oldest first.
+// For very busy tokens the walk back stops after MaxPages, so "earliest" is the
+// earliest we reached.
+func (f Fetcher) TokenTrades(ctx context.Context, tok model.Token) ([]model.Trade, error) {
+	key := tok.CurveKey
+	if key == "" {
+		var err error
+		if key, err = curve.DeriveBondingCurve(tok.Mint); err != nil {
+			return nil, err
+		}
+	}
+	var sigs []solana.SigInfo
+	before := ""
+	for page := 0; page < max(f.MaxPages, 1); page++ {
+		got, err := f.RPC.GetSignaturesForAddress(ctx, key, before, 1000)
+		if err != nil {
+			return nil, err
+		}
+		sigs = append(sigs, got...)
+		if len(got) < 1000 {
+			break
+		}
+		before = got[len(got)-1].Signature
+	}
+	// newest first -> oldest first, successful only
+	var ordered []solana.SigInfo
+	for i := len(sigs) - 1; i >= 0; i-- {
+		if sigs[i].Err == nil {
+			ordered = append(ordered, sigs[i])
+		}
+	}
+	if f.MaxTx > 0 && len(ordered) > f.MaxTx {
+		ordered = ordered[:f.MaxTx]
+	}
+	var trades []model.Trade
+	for _, s := range ordered {
+		tx, err := f.RPC.GetTxEvents(ctx, s.Signature)
+		if err != nil {
+			return trades, err
+		}
+		if tx.Failed {
+			continue
+		}
+		trades = append(trades, ToTrades(tx, tok.Mint, key)...)
+	}
+	return trades, nil
+}
+
+// ToTrades converts a transaction's TradeEvents for mint into model.Trades.
+func ToTrades(tx solana.TxEvents, mint, curveKey string) []model.Trade {
+	var out []model.Trade
+	for i, ev := range EventsFromTx(tx) {
+		if ev.Mint != mint {
+			continue
+		}
+		side := model.SideSell
+		if ev.IsBuy {
+			side = model.SideBuy
+		}
+		at := tx.BlockTime
+		if ev.Timestamp > 0 {
+			at = timeUnix(ev.Timestamp)
+		}
+		out = append(out, model.Trade{
+			Signature: fmt.Sprintf("%s#%d", tx.Signature, i), Mint: mint, Trader: ev.User, Side: side,
+			SolAmount: ev.SolAmount, TokenAmount: ev.TokenAmount, VSol: ev.VSol, VTokens: ev.VTokens,
+			Pool: "pump", BondingCurveKey: curveKey, ReceivedAt: at,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ReceivedAt.Before(out[j].ReceivedAt) })
+	return out
+}
+
+func timeUnix(s int64) time.Time { return time.Unix(s, 0).UTC() }
+
+// Static serves token history from a recorded trade list (replay and tests).
+type Static struct{ byMint map[string][]model.Trade }
+
+func NewStatic(trades []model.Trade) *Static {
+	s := &Static{byMint: map[string][]model.Trade{}}
+	for _, t := range trades {
+		s.byMint[t.Mint] = append(s.byMint[t.Mint], t)
+	}
+	return s
+}
+
+func (s *Static) TokenTrades(_ context.Context, tok model.Token) ([]model.Trade, error) {
+	return s.byMint[tok.Mint], nil
+}

@@ -77,6 +77,7 @@ type Token struct {
 	LastTradeAt time.Time `json:"last_trade_at"`
 	Migrated    bool      `json:"migrated"`
 	Discovered  bool      `json:"discovered"`
+	CurveKey    string    `json:"bonding_curve_key"`
 }
 
 // SimTrade is one simulated copy fill.

@@ -279,4 +279,10 @@ func TestSnapshotModeEndToEnd(t *testing.T) {
 	if len(fills) == 0 {
 		t.Error("executor did not trade in snapshot mode")
 	}
+	// Discovery works from fetched token history instead of the stream.
+	for _, e := range []string{roles.Early1, roles.Early2} {
+		if w, ok, _ := st.GetWallet(ctx, e); !ok || w.Source != model.SourceDiscovery {
+			t.Errorf("early buyer %s not discovered in snapshot mode", e[:6])
+		}
+	}
 }

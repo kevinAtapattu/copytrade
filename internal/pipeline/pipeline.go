@@ -11,6 +11,7 @@ import (
 	"copytrade/internal/config"
 	"copytrade/internal/curve"
 	"copytrade/internal/exec"
+	"copytrade/internal/history"
 	"copytrade/internal/ingest"
 	"copytrade/internal/jobs"
 	"copytrade/internal/model"
@@ -56,7 +57,9 @@ func Run(ctx context.Context, c config.Config, st store.Store, src *source.Repla
 	in := ingest.New(src, st, b, c.TokenUnsubCooldown, c.TokenMaxWatch)
 	in.Guard = ingest.Guard{DailyBudget: c.MsgDailyBudget, WalletMaxPerHour: c.WalletMaxPerHour}
 	var snap *snapshot.Snapshotter
+	var hist jobs.History
 	if opt.Mode == "snapshot" {
+		hist = history.NewStatic(src.Trades())
 		snap = snapshot.New(snapshot.NewHistoryReader(src.Trades()), b, st, model.Delays, c.MarkInterval)
 		in.Tokens = snap
 		in.Observer = snap.OnTrade
@@ -97,7 +100,7 @@ func Run(ctx context.Context, c config.Config, st store.Store, src *source.Repla
 		if _, _, err := jobs.ScoreAndRotate(ctx, st, b, c, now); err != nil && runErr == nil {
 			runErr = err
 		}
-		if _, err := jobs.Discover(ctx, st, b, c, now); err != nil && runErr == nil {
+		if _, err := jobs.Discover(ctx, st, b, c, now, hist); err != nil && runErr == nil {
 			runErr = err
 		}
 		if err := in.ReloadWallets(ctx); err != nil && runErr == nil {

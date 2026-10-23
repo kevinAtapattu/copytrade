@@ -293,12 +293,12 @@ func (p *Postgres) CountTokenTradesSince(ctx context.Context, since time.Time) (
 
 // ---- tokens
 
-const tokenCols = `mint, first_seen, first_price, max_price, last_price, v_sol, v_tokens, pool, last_trade_at, migrated, discovered`
+const tokenCols = `mint, first_seen, first_price, max_price, last_price, v_sol, v_tokens, pool, last_trade_at, migrated, discovered, bonding_curve_key`
 
 func scanToken(r pgx.Row) (model.Token, error) {
 	var t model.Token
 	err := r.Scan(&t.Mint, &t.FirstSeen, &t.FirstPrice, &t.MaxPrice, &t.LastPrice, &t.VSol, &t.VTokens, &t.Pool,
-		&t.LastTradeAt, &t.Migrated, &t.Discovered)
+		&t.LastTradeAt, &t.Migrated, &t.Discovered, &t.CurveKey)
 	return t, err
 }
 
@@ -314,11 +314,11 @@ func (p *Postgres) UpsertTokenFromTrade(ctx context.Context, t model.Trade) erro
 		return err
 	}
 	n := ApplyTradeToToken(cur, exists, t)
-	_, err = tx.Exec(ctx, `INSERT INTO tokens (`+tokenCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	_, err = tx.Exec(ctx, `INSERT INTO tokens (`+tokenCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		ON CONFLICT (mint) DO UPDATE SET first_price=EXCLUDED.first_price, max_price=EXCLUDED.max_price,
 		last_price=EXCLUDED.last_price, v_sol=EXCLUDED.v_sol, v_tokens=EXCLUDED.v_tokens, pool=EXCLUDED.pool,
-		last_trade_at=EXCLUDED.last_trade_at, migrated=EXCLUDED.migrated`,
-		n.Mint, n.FirstSeen, n.FirstPrice, n.MaxPrice, n.LastPrice, n.VSol, n.VTokens, n.Pool, n.LastTradeAt, n.Migrated, n.Discovered)
+		last_trade_at=EXCLUDED.last_trade_at, migrated=EXCLUDED.migrated, bonding_curve_key=EXCLUDED.bonding_curve_key`,
+		n.Mint, n.FirstSeen, n.FirstPrice, n.MaxPrice, n.LastPrice, n.VSol, n.VTokens, n.Pool, n.LastTradeAt, n.Migrated, n.Discovered, n.CurveKey)
 	if err != nil {
 		return err
 	}

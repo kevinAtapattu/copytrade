@@ -189,6 +189,9 @@ func ApplyTradeToToken(tok model.Token, exists bool, t model.Trade) model.Token 
 	if !exists {
 		tok = model.Token{Mint: t.Mint, FirstSeen: t.ReceivedAt, FirstPrice: p, MaxPrice: p}
 	}
+	if t.BondingCurveKey != "" {
+		tok.CurveKey = t.BondingCurveKey
+	}
 	if t.Pool != "" && t.Pool != "pump" {
 		tok.Migrated = true
 		tok.Pool = t.Pool
