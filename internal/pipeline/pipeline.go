@@ -49,6 +49,7 @@ func Run(ctx context.Context, c config.Config, st store.Store, src *source.Repla
 	px := price.Fixed(opt.SolUSD)
 
 	in := ingest.New(src, st, b, c.TokenUnsubCooldown, c.TokenMaxWatch)
+	in.Guard = ingest.Guard{DailyBudget: c.MsgDailyBudget, WalletMaxPerHour: c.WalletMaxPerHour}
 	eng := sim.New(sim.Params{SizeUSD: c.CopySizeUSD, Delays: model.Delays, Fees: sim.FeesFrom(c)}, st, px)
 	ex := exec.New(exec.Paper{Fees: curve.Fees{PumpPct: c.PumpFeePct, BotPct: c.PumpPortalLocalFeePct,
 		NetworkSol: c.BaseFeeSol + c.ExecPriorityFee}}, st, b, px,

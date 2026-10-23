@@ -128,3 +128,9 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - `RECORD_FILE=path` on ingest appends every live trade in the same JSONL format, so real sessions can be replayed later with `go run ./cmd/replay -fixture path -wallets wallets.txt`.
 - The live trader is tested against fake PumpPortal and RPC HTTP servers: request shape, local signature verifies, confirm, balance-delta parsing, and 3 fresh rebuilds on on-chain failure. The PumpPortal websocket client is tested against a fake websocket server: one connection at a time, resubscribe after reconnect, handler can subscribe without deadlock.
 - Discord was added (`DISCORD_WEBHOOK_URL`, a plain channel webhook, no bot). Every configured destination gets each alert. @mentions are disabled in messages.
+
+## Spending guard
+- PumpPortal bills per message received, duplicates included, so ingest meters every message before dedupe.
+- `MSG_DAILY_BUDGET` (default 1000/day, about 0.001 SOL/day or roughly $4 CAD/month at most): when hit, every account and token subscription is dropped until midnight UTC, then restored automatically. 80% usage sends a warning alert. After a restart, today's count is restored from the DB, so restarting can't reset the budget.
+- `WALLET_MAX_TRADES_PER_HOUR` (default 30): a tracked wallet over this in a rolling hour is set to `dropped` with reason "spam guard", unsubscribed, and alerted. It stays dropped until you re-add it from the dashboard.
+- PumpPortal may deliver a few messages after an unsubscribe; those are still counted.

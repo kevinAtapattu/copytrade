@@ -5,6 +5,7 @@ package ingest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -22,8 +23,18 @@ const Dust = 1.0
 // MinCooldown keeps a token subscribed long enough for the +60s simulated exit.
 const MinCooldown = 90 * time.Second
 
+// TokenWatcher follows token prices for tokens tracked wallets hold. In stream
+// mode it is the source itself (subscribeTokenTrade); in snapshot mode it polls
+// the bonding curve over RPC instead.
+type TokenWatcher interface {
+	SubscribeTokens(mints []string)
+	UnsubscribeTokens(mints []string)
+}
+
 type Ingestor struct {
 	Src      source.Source
+	Tokens   TokenWatcher
+	Guard    Guard
 	Store    store.Store
 	Bus      bus.Bus
 	Cooldown time.Duration
@@ -36,6 +47,7 @@ type Ingestor struct {
 	watch   map[string]*watch
 	seen    *dedupe
 	rate    rateWindow
+	g       guardState
 }
 
 type watch struct {
@@ -46,7 +58,7 @@ type watch struct {
 
 func New(src source.Source, st store.Store, b bus.Bus, cooldown, maxWatch time.Duration) *Ingestor {
 	return &Ingestor{
-		Src: src, Store: st, Bus: b, Cooldown: max(cooldown, MinCooldown), MaxWatch: maxWatch,
+		Src: src, Tokens: src, Store: st, Bus: b, Cooldown: max(cooldown, MinCooldown), MaxWatch: maxWatch,
 		tracked: map[string]bool{}, watch: map[string]*watch{}, seen: newDedupe(50000),
 	}
 }
@@ -77,12 +89,13 @@ func (in *Ingestor) ReloadWallets(ctx context.Context) error {
 		}
 	}
 	in.tracked = want
+	paused := in.g.paused
 	in.mu.Unlock()
-	if len(add) > 0 {
+	if len(add) > 0 && !paused {
 		in.Src.SubscribeAccounts(add)
 		slog.Info("subscribed accounts", "n", len(add))
 	}
-	if len(remove) > 0 {
+	if len(remove) > 0 && !paused {
 		in.Src.UnsubscribeAccounts(remove)
 		slog.Info("unsubscribed accounts", "n", len(remove))
 	}
@@ -124,8 +137,11 @@ func (in *Ingestor) RestoreWatches(ctx context.Context, now time.Time) error {
 			in.mu.Unlock()
 		}
 	}
-	if len(mints) > 0 {
-		in.Src.SubscribeTokens(mints)
+	in.mu.Lock()
+	paused := in.g.paused
+	in.mu.Unlock()
+	if len(mints) > 0 && !paused {
+		in.Tokens.SubscribeTokens(mints)
 		slog.Info("restored token subscriptions", "n", len(mints))
 	}
 	return nil
@@ -134,8 +150,16 @@ func (in *Ingestor) RestoreWatches(ctx context.Context, now time.Time) error {
 // HandleTrade is the source callback.
 func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 	in.mu.Lock()
+	// Meter before dedupe: PumpPortal bills every message, duplicates included.
+	pause, warn, spam := in.countMessage(t)
+	if spam {
+		in.mu.Unlock()
+		in.dropSpammer(ctx, t.Trader, t.ReceivedAt)
+		in.mu.Lock()
+	}
 	if in.seen.seen(t.Signature + "|" + t.Trader) {
 		in.mu.Unlock()
+		in.afterCount(ctx, pause, warn)
 		return
 	}
 	in.rate.add(t.ReceivedAt)
@@ -146,12 +170,12 @@ func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 	t.IsTarget = in.tracked[t.Trader]
 	var subscribe bool
 	if t.IsTarget {
-		subscribe = in.trackHolding(t)
+		subscribe = in.trackHolding(t) && !in.g.paused
 	}
 	in.mu.Unlock()
 
 	if subscribe {
-		in.Src.SubscribeTokens([]string{t.Mint})
+		in.Tokens.SubscribeTokens([]string{t.Mint})
 	}
 	if _, err := in.Store.InsertTokenTrade(ctx, t); err != nil {
 		slog.Warn("insert token trade", "err", err)
@@ -166,6 +190,17 @@ func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 	}
 	if err := bus.PublishJSON(ctx, in.Bus, bus.StreamTrades, t); err != nil {
 		slog.Warn("publish trade", "err", err)
+	}
+	in.afterCount(ctx, pause, warn)
+}
+
+func (in *Ingestor) afterCount(ctx context.Context, pause, warn bool) {
+	if warn {
+		st := in.GuardStats()
+		in.emit(ctx, "info", fmt.Sprintf("80%% of today's message budget used (%d/%d)", st.MessagesToday, st.DailyBudget))
+	}
+	if pause {
+		in.pauseAll(ctx)
 	}
 }
 
@@ -196,6 +231,7 @@ func (in *Ingestor) trackHolding(t model.Trade) bool {
 // Tick unsubscribes tokens whose tracked holders have exited (after cooldown) or
 // that we have watched longer than MaxWatch.
 func (in *Ingestor) Tick(now time.Time) {
+	in.resumeIfNewDay(context.Background(), now)
 	in.mu.Lock()
 	var drop []string
 	for mint, w := range in.watch {
@@ -208,7 +244,7 @@ func (in *Ingestor) Tick(now time.Time) {
 	}
 	in.mu.Unlock()
 	if len(drop) > 0 {
-		in.Src.UnsubscribeTokens(drop)
+		in.Tokens.UnsubscribeTokens(drop)
 	}
 }
 
@@ -235,6 +271,9 @@ func (in *Ingestor) MsgsPerSec(now time.Time) float64 {
 
 // Run starts the source plus periodic wallet reloads and ticks. Blocks.
 func (in *Ingestor) Run(ctx context.Context, reload time.Duration) error {
+	if err := in.InitBudget(ctx, time.Now()); err != nil {
+		slog.Warn("init budget", "err", err)
+	}
 	if err := in.ReloadWallets(ctx); err != nil {
 		slog.Warn("initial wallet load", "err", err)
 	}

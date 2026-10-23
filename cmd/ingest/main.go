@@ -18,6 +18,7 @@ func main() {
 
 	src := source.NewPumpPortal(a.Cfg.PumpPortalWSURL, a.Cfg.PumpPortalAPIKey)
 	in := ingest.New(src, a.Store, a.Bus, a.Cfg.TokenUnsubCooldown, a.Cfg.TokenMaxWatch)
+	in.Guard = ingest.Guard{DailyBudget: a.Cfg.MsgDailyBudget, WalletMaxPerHour: a.Cfg.WalletMaxPerHour}
 	if path := os.Getenv("RECORD_FILE"); path != "" {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -41,6 +42,7 @@ func main() {
 			"msgs_per_sec":    in.MsgsPerSec(time.Now()),
 			"est_sol_used":    float64(s.Messages) / 10000 * 0.01,
 			"has_api_key":     a.Cfg.PumpPortalAPIKey != "",
+			"guard":           in.GuardStats(),
 		}
 	})
 

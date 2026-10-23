@@ -22,6 +22,8 @@ type Config struct {
 	TokenUnsubCooldown time.Duration
 	TokenMaxWatch      time.Duration
 	WalletReload       time.Duration
+	MsgDailyBudget     int64
+	WalletMaxPerHour   int
 
 	// Simulation
 	CopySizeUSD    float64
@@ -91,6 +93,8 @@ func Load() Config {
 		TokenUnsubCooldown: dur("TOKEN_UNSUB_COOLDOWN", 5*time.Minute),
 		TokenMaxWatch:      dur("TOKEN_MAX_WATCH", 24*time.Hour),
 		WalletReload:       dur("WALLET_RELOAD_INTERVAL", 30*time.Second),
+		MsgDailyBudget:     int64(integer("MSG_DAILY_BUDGET", 1000)),
+		WalletMaxPerHour:   integer("WALLET_MAX_TRADES_PER_HOUR", 30),
 
 		CopySizeUSD:    flt("COPY_SIZE_USD", 25),
 		PumpFeePct:     flt("PUMP_FEE_PCT", 1.25),

@@ -140,3 +140,82 @@ func TestRestoreWatchesAfterRestart(t *testing.T) {
 		t.Fatalf("restored %v", src2.subT)
 	}
 }
+
+func TestDailyBudgetPausesAndResumes(t *testing.T) {
+	in, src, _, _ := setup(t)
+	ctx := context.Background()
+	in.Guard = Guard{DailyBudget: 3}
+	in.InitBudget(ctx, t0)
+	in.HandleTrade(ctx, tr("a", "W1", "buy", 100, 0))
+	in.HandleTrade(ctx, tr("a", "W1", "buy", 100, 0)) // duplicate still costs money
+	if in.GuardStats().Paused {
+		t.Fatal("paused early")
+	}
+	in.HandleTrade(ctx, tr("b", "W2", "buy", 100, time.Second))
+	st := in.GuardStats()
+	if !st.Paused || st.MessagesToday != 3 {
+		t.Fatalf("expected pause at budget: %+v", st)
+	}
+	if len(src.unsubA) != 1 || len(src.unsubA[0]) != 2 || len(src.unsubT) != 1 {
+		t.Fatalf("pause must drop all subs: accounts %v tokens %v", src.unsubA, src.unsubT)
+	}
+	// while paused, reloads must not resubscribe
+	before := len(src.subA)
+	in.ReloadWallets(ctx)
+	if len(src.subA) != before {
+		t.Fatal("resubscribed while paused")
+	}
+	in.Tick(t0.Add(12 * time.Hour)) // same UTC day
+	if !in.GuardStats().Paused {
+		t.Fatal("resumed before midnight")
+	}
+	in.Tick(t0.Add(25 * time.Hour))
+	st = in.GuardStats()
+	if st.Paused || st.MessagesToday != 0 {
+		t.Fatalf("should resume next day: %+v", st)
+	}
+	last := src.subA[len(src.subA)-1]
+	if len(last) != 2 || len(src.subT) < 2 {
+		t.Fatalf("resume must restore accounts %v and tokens %v", last, src.subT)
+	}
+}
+
+func TestInitBudgetFromDB(t *testing.T) {
+	in, _, st, _ := setup(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		st.InsertTokenTrade(ctx, tr(string(rune('a'+i)), "X", "buy", 1, time.Duration(i)*time.Minute))
+	}
+	in.Guard = Guard{DailyBudget: 5}
+	in.InitBudget(ctx, t0.Add(time.Hour))
+	if s := in.GuardStats(); !s.Paused || s.MessagesToday != 5 {
+		t.Fatalf("restart over budget should start paused: %+v", s)
+	}
+}
+
+func TestSpamGuardDropsWallet(t *testing.T) {
+	in, src, st, _ := setup(t)
+	ctx := context.Background()
+	in.Guard = Guard{WalletMaxPerHour: 3}
+	for i := 0; i < 3; i++ {
+		in.HandleTrade(ctx, tr(string(rune('a'+i)), "W1", "buy", 100, time.Duration(i)*10*time.Minute))
+	}
+	// 3 in the hour is fine; the 4th, an hour after the first, is too (window slides)
+	in.HandleTrade(ctx, tr("d", "W1", "buy", 100, 61*time.Minute))
+	if w, _, _ := st.GetWallet(ctx, "W1"); w.Status == model.StatusDropped {
+		t.Fatal("dropped though only 3 trades in any hour")
+	}
+	in.HandleTrade(ctx, tr("e", "W1", "buy", 100, 62*time.Minute))
+	w, _, _ := st.GetWallet(ctx, "W1")
+	if w.Status != model.StatusDropped || len(src.unsubA) != 1 || src.unsubA[0][0] != "W1" {
+		t.Fatalf("spammer not dropped: status %s unsub %v", w.Status, src.unsubA)
+	}
+	in.ReloadWallets(ctx)
+	for _, sub := range src.subA[1:] {
+		for _, a := range sub {
+			if a == "W1" {
+				t.Fatal("dropped spammer was resubscribed")
+			}
+		}
+	}
+}
