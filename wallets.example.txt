@@ -1,0 +1,4 @@
+# One Solana wallet per line, optional label after the address.
+# Copy to wallets.txt (gitignored) and replace with real wallets you want to paper-track.
+# Example:
+# 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU some-label

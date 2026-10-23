@@ -24,3 +24,6 @@ pgdata/
 .DS_Store
 .vscode/
 .idea/
+
+# your tracked wallets
+wallets.txt

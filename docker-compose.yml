@@ -1,0 +1,96 @@
+x-go: &go
+  image: copytrade:latest
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgres://copytrade:copytrade@postgres:5432/copytrade?sslmode=disable
+    REDIS_URL: redis://redis:6379
+    WALLETS_FILE: /app/wallets.txt
+  volumes:
+    - ./wallets.txt:/app/wallets.txt:ro
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: copytrade
+      POSTGRES_PASSWORD: copytrade
+      POSTGRES_DB: copytrade
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copytrade"]
+      interval: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 20
+
+  migrate:
+    <<: *go
+    build: .
+    restart: "no"
+    command: ["/app/migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Exactly one ingest. PumpPortal bans clients that open repeated/parallel connections.
+  ingest:
+    <<: *go
+    command: ["/app/ingest"]
+    deploy: { replicas: 1 }
+
+  simulator:
+    <<: *go
+    command: ["/app/simulator"]
+
+  scorer:
+    <<: *go
+    command: ["/app/scorer"]
+
+  discovery:
+    <<: *go
+    command: ["/app/discovery"]
+
+  executor:
+    <<: *go
+    command: ["/app/executor"]
+    deploy: { replicas: 1 }
+
+  alerter:
+    <<: *go
+    command: ["/app/alerter"]
+
+  api:
+    <<: *go
+    command: ["/app/api"]
+    ports: ["127.0.0.1:8080:8080"]
+
+  dashboard:
+    build: ./dashboard
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8080
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [api]
+
+volumes:
+  pgdata:
+  redisdata:
