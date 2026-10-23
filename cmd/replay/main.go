@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"copytrade/internal/api"
+	"copytrade/internal/bus"
 	"copytrade/internal/config"
 	"copytrade/internal/fixture"
 	"copytrade/internal/model"
@@ -27,6 +29,7 @@ func main() {
 	path := flag.String("fixture", "fixtures/replay.jsonl", "JSONL of {at, msg} lines (fixture or ingest RECORD_FILE)")
 	useDB := flag.Bool("db", false, "write to Postgres at DATABASE_URL instead of memory")
 	reset := flag.Bool("reset", false, "with -db: truncate all tables first")
+	serve := flag.String("serve", "", "after replay, serve the API on this address (e.g. :8080) for the dashboard")
 	walletsFile := flag.String("wallets", "", "wallets file to seed when there is no .meta.json (default WALLETS_FILE)")
 	flag.Parse()
 	ctx := context.Background()
@@ -77,6 +80,15 @@ func main() {
 	fmt.Printf("target trades %d, sim fills %d (expect %d), job runs %d, events %v\n\n",
 		rep.TargetTrades, rep.SimTrades, rep.TargetTrades*len(model.Delays), rep.JobRuns, rep.Events)
 	printSummary(ctx, st, meta)
+
+	if *serve != "" {
+		srv := api.New(st, bus.NewMemory(), nil, c)
+		// Present the replay as if it were live: "now" is the end of the data.
+		end := rep.End.Add(time.Minute)
+		srv.Now = func() time.Time { return end }
+		fmt.Printf("\nserving API on %s (Ctrl+C to stop). Run the dashboard with: make dashboard-dev\n", *serve)
+		check(srv.Serve(ctx, *serve))
+	}
 }
 
 func printSummary(ctx context.Context, st store.Store, meta *fixture.Meta) {
