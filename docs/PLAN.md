@@ -17,7 +17,7 @@ PumpPortal / Helius stream
 - [x] Go module, docker-compose (Postgres, Redis)
 - [x] Postgres schema: wallets, target_trades, token_trades, sim_trades
 - [x] ingest: single PumpPortal ws, subscribe to wallets, auto-subscribe to their tokens
-- [ ] simulator: $25 entries/exits at +2s/+10s/+60s with fees + slippage
+- [x] simulator: $25 entries/exits at +2s/+10s/+60s with fees + slippage
 - [x] wallets loaded from wallets.txt
 - [ ] run 24/7 on VPS
 

@@ -216,7 +216,9 @@ type dedupe struct {
 	set  map[string]struct{}
 }
 
-func newDedupe(n int) *dedupe { return &dedupe{ring: make([]string, n), set: make(map[string]struct{}, n)} }
+func newDedupe(n int) *dedupe {
+	return &dedupe{ring: make([]string, n), set: make(map[string]struct{}, n)}
+}
 
 func (d *dedupe) seen(k string) bool {
 	if _, ok := d.set[k]; ok {

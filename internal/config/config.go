@@ -16,60 +16,60 @@ type Config struct {
 	RedisURL    string
 
 	// Ingest
-	PumpPortalAPIKey  string
-	PumpPortalWSURL   string
-	WalletsFile       string
+	PumpPortalAPIKey   string
+	PumpPortalWSURL    string
+	WalletsFile        string
 	TokenUnsubCooldown time.Duration
-	TokenMaxWatch     time.Duration
-	WalletReload      time.Duration
+	TokenMaxWatch      time.Duration
+	WalletReload       time.Duration
 
 	// Simulation
-	CopySizeUSD     float64
-	PumpFeePct      float64
-	BotFeeEnabled   bool
-	BotFeePct       float64
-	PriorityFeeSol  float64
-	BaseFeeSol      float64
-	SolUSDFallback  float64
-	SolUSDFixed     float64 // >0 disables price fetching (replay, tests)
+	CopySizeUSD    float64
+	PumpFeePct     float64
+	BotFeeEnabled  bool
+	BotFeePct      float64
+	PriorityFeeSol float64
+	BaseFeeSol     float64
+	SolUSDFallback float64
+	SolUSDFixed    float64 // >0 disables price fetching (replay, tests)
 
 	// Scoring + rotation
-	ScoreInterval      time.Duration
-	RotationDelayS     int
-	LiveMax            int
-	BenchMax           int
-	BankrollUSD        float64
-	MaxDrawdown        float64
-	PromoteMinDays     float64
-	PromoteMinTrades   int
-	DropInactiveDays   float64
-	DropBadPnlUSD      float64
-	DropBadMinTrades   int
+	ScoreInterval    time.Duration
+	RotationDelayS   int
+	LiveMax          int
+	BenchMax         int
+	BankrollUSD      float64
+	MaxDrawdown      float64
+	PromoteMinDays   float64
+	PromoteMinTrades int
+	DropInactiveDays float64
+	DropBadPnlUSD    float64
+	DropBadMinTrades int
 
 	// Discovery
-	DiscoveryInterval time.Duration
-	DiscoveryMult     float64
+	DiscoveryInterval  time.Duration
+	DiscoveryMult      float64
 	DiscoveryEarlyMult float64
-	DiscoveryExitMult float64
-	DiscoveryMinHits  int
+	DiscoveryExitMult  float64
+	DiscoveryMinHits   int
 
 	// API
 	APIAddr string
 
 	// Executor
-	LiveTrading      bool
-	TraderPrivateKey string
-	SolanaRPCURL     string
-	ExecSizeUSD      float64
-	ExecSlippagePct  float64
-	ExecPriorityFee  float64
-	JitoTipSol       float64
-	JitoURL          string
-	MaxOpenPositions int
-	StopLossPct      float64
-	DailyLossLimitUSD float64
-	ExecMaxAttempts  int
-	PumpPortalTradeURL string
+	LiveTrading           bool
+	TraderPrivateKey      string
+	SolanaRPCURL          string
+	ExecSizeUSD           float64
+	ExecSlippagePct       float64
+	ExecPriorityFee       float64
+	JitoTipSol            float64
+	JitoURL               string
+	MaxOpenPositions      int
+	StopLossPct           float64
+	DailyLossLimitUSD     float64
+	ExecMaxAttempts       int
+	PumpPortalTradeURL    string
 	PumpPortalLocalFeePct float64
 
 	// Alerts

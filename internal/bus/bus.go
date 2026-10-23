@@ -10,8 +10,8 @@ import (
 
 // Streams.
 const (
-	StreamTrades = "trades"  // every trade (model.Trade, IsTarget set for tracked wallets)
-	StreamEvents = "events"  // model.Event notifications for UI + alerts
+	StreamTrades = "trades" // every trade (model.Trade, IsTarget set for tracked wallets)
+	StreamEvents = "events" // model.Event notifications for UI + alerts
 )
 
 type Handler func(ctx context.Context, payload []byte) error

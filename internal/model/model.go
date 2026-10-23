@@ -81,28 +81,28 @@ type Token struct {
 
 // SimTrade is one simulated copy fill.
 type SimTrade struct {
-	ID             string    `json:"id"`
-	PositionID     string    `json:"position_id"`
-	TargetSig      string    `json:"target_sig"`
-	Wallet         string    `json:"wallet"`
-	Mint           string    `json:"mint"`
-	DelayS         int       `json:"delay_s"`
-	Side           string    `json:"side"`
-	TargetAt       time.Time `json:"target_at"`
-	FillAt         time.Time `json:"fill_at"`
-	SolAmount      float64   `json:"sol_amount"` // SOL spent (buy) or received (sell), net of all fees
-	TokenAmount    float64   `json:"token_amount"`
-	SpotPrice      float64   `json:"spot_price"`
-	FillPrice      float64   `json:"fill_price"`
-	TargetPrice    float64   `json:"target_price"`
-	SlippagePct    float64   `json:"slippage_pct"`
-	PumpFeeSol     float64   `json:"pump_fee_sol"`
-	BotFeeSol      float64   `json:"bot_fee_sol"`
-	NetworkFeeSol  float64   `json:"network_fee_sol"`
-	SolUSD         float64   `json:"sol_usd"`
-	SellFraction   float64   `json:"sell_fraction,omitempty"`
-	Skipped        bool      `json:"skipped"`
-	SkipReason     string    `json:"skip_reason,omitempty"`
+	ID            string    `json:"id"`
+	PositionID    string    `json:"position_id"`
+	TargetSig     string    `json:"target_sig"`
+	Wallet        string    `json:"wallet"`
+	Mint          string    `json:"mint"`
+	DelayS        int       `json:"delay_s"`
+	Side          string    `json:"side"`
+	TargetAt      time.Time `json:"target_at"`
+	FillAt        time.Time `json:"fill_at"`
+	SolAmount     float64   `json:"sol_amount"` // SOL spent (buy) or received (sell), net of all fees
+	TokenAmount   float64   `json:"token_amount"`
+	SpotPrice     float64   `json:"spot_price"`
+	FillPrice     float64   `json:"fill_price"`
+	TargetPrice   float64   `json:"target_price"`
+	SlippagePct   float64   `json:"slippage_pct"`
+	PumpFeeSol    float64   `json:"pump_fee_sol"`
+	BotFeeSol     float64   `json:"bot_fee_sol"`
+	NetworkFeeSol float64   `json:"network_fee_sol"`
+	SolUSD        float64   `json:"sol_usd"`
+	SellFraction  float64   `json:"sell_fraction,omitempty"`
+	Skipped       bool      `json:"skipped"`
+	SkipReason    string    `json:"skip_reason,omitempty"`
 }
 
 // Position statuses.
@@ -114,18 +114,18 @@ const (
 
 // SimPosition aggregates fills for one (wallet, mint, delay).
 type SimPosition struct {
-	ID          string     `json:"id"`
-	Wallet      string     `json:"wallet"`
-	Mint        string     `json:"mint"`
-	DelayS      int        `json:"delay_s"`
-	OpenedAt    time.Time  `json:"opened_at"`
-	ClosedAt    *time.Time `json:"closed_at,omitempty"`
-	Status      string     `json:"status"`
-	CostSol     float64    `json:"cost_sol"`
-	ProceedsSol float64    `json:"proceeds_sol"`
-	TokensHeld  float64    `json:"tokens_held"`
-	TokensBought float64   `json:"tokens_bought"`
-	SolUSD      float64    `json:"sol_usd"` // SOL/USD at entry, used to report USD PnL
+	ID           string     `json:"id"`
+	Wallet       string     `json:"wallet"`
+	Mint         string     `json:"mint"`
+	DelayS       int        `json:"delay_s"`
+	OpenedAt     time.Time  `json:"opened_at"`
+	ClosedAt     *time.Time `json:"closed_at,omitempty"`
+	Status       string     `json:"status"`
+	CostSol      float64    `json:"cost_sol"`
+	ProceedsSol  float64    `json:"proceeds_sol"`
+	TokensHeld   float64    `json:"tokens_held"`
+	TokensBought float64    `json:"tokens_bought"`
+	SolUSD       float64    `json:"sol_usd"` // SOL/USD at entry, used to report USD PnL
 }
 
 // RealizedSol is proceeds minus cost. Only meaningful once closed.
@@ -138,22 +138,22 @@ func (p SimPosition) MarkSol(price float64) float64 {
 
 // Score is one copyability snapshot for a wallet, delay and window.
 type Score struct {
-	Wallet        string    `json:"wallet"`
-	DelayS        int       `json:"delay_s"`
-	WindowDays    int       `json:"window_days"`
-	ComputedAt    time.Time `json:"computed_at"`
-	Positions     int       `json:"positions"`
-	ClosedCount   int       `json:"closed"`
-	PnlUSD        float64   `json:"pnl_usd"`
-	PnlExBestUSD  float64   `json:"pnl_ex_best_usd"`
-	BestTradeUSD  float64   `json:"best_trade_usd"`
-	WinRate       float64   `json:"win_rate"`
-	MaxDrawdown   float64   `json:"max_drawdown"` // fraction of peak equity, 0.25 = -25%
-	AvgHoldS      float64   `json:"avg_hold_s"`
-	TradesPerDay  float64   `json:"trades_per_day"`
-	ActiveDays    float64   `json:"active_days"` // span between first and last observed position
-	LuckyTrade    bool      `json:"lucky_trade"`
-	Score         float64   `json:"score"`
+	Wallet       string    `json:"wallet"`
+	DelayS       int       `json:"delay_s"`
+	WindowDays   int       `json:"window_days"`
+	ComputedAt   time.Time `json:"computed_at"`
+	Positions    int       `json:"positions"`
+	ClosedCount  int       `json:"closed"`
+	PnlUSD       float64   `json:"pnl_usd"`
+	PnlExBestUSD float64   `json:"pnl_ex_best_usd"`
+	BestTradeUSD float64   `json:"best_trade_usd"`
+	WinRate      float64   `json:"win_rate"`
+	MaxDrawdown  float64   `json:"max_drawdown"` // fraction of peak equity, 0.25 = -25%
+	AvgHoldS     float64   `json:"avg_hold_s"`
+	TradesPerDay float64   `json:"trades_per_day"`
+	ActiveDays   float64   `json:"active_days"` // span between first and last observed position
+	LuckyTrade   bool      `json:"lucky_trade"`
+	Score        float64   `json:"score"`
 }
 
 // Rotation records a wallet status change.
@@ -181,26 +181,26 @@ type DiscoveryHit struct {
 
 // LiveFill is an executor fill, paper or live.
 type LiveFill struct {
-	ID           string    `json:"id"`
-	PositionID   string    `json:"position_id"`
-	Mode         string    `json:"mode"` // paper | live
-	TargetSig    string    `json:"target_sig"`
-	Wallet       string    `json:"wallet"`
-	Mint         string    `json:"mint"`
-	Side         string    `json:"side"`
-	Reason       string    `json:"reason"` // copy | stop_loss
-	TargetAt     time.Time `json:"target_at"`
-	SentAt       time.Time `json:"sent_at"`
-	FilledAt     *time.Time `json:"filled_at,omitempty"`
-	Signature    string    `json:"signature,omitempty"`
-	Status       string    `json:"status"` // filled | failed | rejected
-	Error        string    `json:"error,omitempty"`
-	Attempts     int       `json:"attempts"`
-	SolAmount    float64   `json:"sol_amount"`
-	TokenAmount  float64   `json:"token_amount"`
-	FillPrice    float64   `json:"fill_price"`
-	FeesSol      float64   `json:"fees_sol"`
-	SolUSD       float64   `json:"sol_usd"`
+	ID          string     `json:"id"`
+	PositionID  string     `json:"position_id"`
+	Mode        string     `json:"mode"` // paper | live
+	TargetSig   string     `json:"target_sig"`
+	Wallet      string     `json:"wallet"`
+	Mint        string     `json:"mint"`
+	Side        string     `json:"side"`
+	Reason      string     `json:"reason"` // copy | stop_loss
+	TargetAt    time.Time  `json:"target_at"`
+	SentAt      time.Time  `json:"sent_at"`
+	FilledAt    *time.Time `json:"filled_at,omitempty"`
+	Signature   string     `json:"signature,omitempty"`
+	Status      string     `json:"status"` // filled | failed | rejected
+	Error       string     `json:"error,omitempty"`
+	Attempts    int        `json:"attempts"`
+	SolAmount   float64    `json:"sol_amount"`
+	TokenAmount float64    `json:"token_amount"`
+	FillPrice   float64    `json:"fill_price"`
+	FeesSol     float64    `json:"fees_sol"`
+	SolUSD      float64    `json:"sol_usd"`
 	// What the simulator predicted for the same trade at the closest delay.
 	SimFillPrice float64 `json:"sim_fill_price,omitempty"`
 }
