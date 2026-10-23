@@ -27,3 +27,4 @@ pgdata/
 
 # your tracked wallets
 wallets.txt
+*.tsbuildinfo
