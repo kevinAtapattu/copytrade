@@ -68,3 +68,9 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
   - No trade for `DROP_INACTIVE_DAYS` (7).
   - 30d sim PnL <= `DROP_BAD_PNL_USD` (-$50) over >= 15 trades.
   - When the bench exceeds `BENCH_MAX` (50), the lowest 14d scores are dropped.
+
+## API
+- Plain `net/http` with Go 1.22+ route patterns, no framework. CORS is open (`*`) because it binds to 127.0.0.1 and the dashboard proxies to it anyway.
+- Live updates use SSE (`/api/stream`), not websockets: one-way, works through the Next.js proxy, auto-reconnects in the browser. One hub goroutine tails the Redis `events` stream and fans out to clients. Slow clients drop messages instead of blocking.
+- The overview defaults to live wallets at +2s. While no wallet is live yet, it shows all bench wallets so the page is not empty.
+- PumpPortal SOL usage = token trades stored / 10,000 * 0.01 SOL. Every metered message we keep is one stored trade (dupes across account+token subs are a small overcount we ignore). The monthly figure extrapolates the last 24h.
