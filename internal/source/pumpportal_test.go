@@ -118,3 +118,48 @@ func TestPumpPortalIdleWithoutKey(t *testing.T) {
 		t.Fatalf("should idle without key: %+v", p.Stats())
 	}
 }
+
+func TestPumpPortalPauseClosesConnectionUntilResume(t *testing.T) {
+	var open, conns atomic.Int32
+	up := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		conns.Add(1)
+		open.Add(1)
+		defer open.Add(-1)
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+	p := NewPumpPortal("ws"+strings.TrimPrefix(srv.URL, "http"), "k")
+	p.MinBackoff, p.MaxBackoff = 20*time.Millisecond, 40*time.Millisecond
+	p.SubscribeAccounts([]string{"W"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx, func(model.Trade) {})
+	waitFor := func(cond func() bool, what string) {
+		t.Helper()
+		for i := 0; i < 200 && !cond(); i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !cond() {
+			t.Fatalf("timed out waiting for %s (open=%d conns=%d)", what, open.Load(), conns.Load())
+		}
+	}
+	waitFor(func() bool { return open.Load() == 1 }, "first connection")
+	p.Pause()
+	waitFor(func() bool { return open.Load() == 0 }, "connection closed on pause")
+	time.Sleep(300 * time.Millisecond) // many backoff periods: must NOT reconnect
+	if open.Load() != 0 || conns.Load() != 1 {
+		t.Fatalf("reconnected while paused: open=%d conns=%d", open.Load(), conns.Load())
+	}
+	p.Resume()
+	waitFor(func() bool { return open.Load() == 1 && conns.Load() == 2 }, "one reconnect after resume")
+}

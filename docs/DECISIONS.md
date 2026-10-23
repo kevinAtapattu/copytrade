@@ -131,9 +131,10 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 
 ## Spending guard
 - PumpPortal bills per message received, duplicates included, so ingest meters every message before dedupe.
-- `MSG_DAILY_BUDGET` (default 1000/day, about 0.001 SOL/day or roughly $4 CAD/month at most): when hit, every account and token subscription is dropped until midnight UTC, then restored automatically. 80% usage sends a warning alert. After a restart, today's count is restored from the DB, so restarting can't reset the budget.
+- `MSG_DAILY_BUDGET` (default 1000/day, about 0.001 SOL/day or roughly $4 CAD/month at most): when hit, ingest **closes the PumpPortal websocket** and keeps it closed until midnight UTC, then opens one fresh connection and re-sends every subscription. Closing the connection, rather than relying on unsubscribe messages, means the cap holds even if PumpPortal ignores or mishandles keyed `unsubscribeAccountTrade` (its docs don't show that form). A restart that finds today's budget already spent starts disconnected. 80% usage sends a warning alert. After a restart, today's count is restored from the DB, so restarting can't reset the budget.
 - `WALLET_MAX_TRADES_PER_HOUR` (default 30): a tracked wallet over this in a rolling hour is set to `dropped` with reason "spam guard", unsubscribed, and alerted. It stays dropped until you re-add it from the dashboard.
-- PumpPortal may deliver a few messages after an unsubscribe; those are still counted.
+- PumpPortal may deliver a few messages after an unsubscribe; those are still counted. The spam guard uses keyed unsubscribe for the one wallet. If that is ignored, the daily cap is still the backstop.
+- The non-SOL check (`Classify`) runs on the stream's reader goroutine, after the price reads are scheduled, with a 1.5s timeout. It fails open, so a slow RPC can't stall ingest or delay the +2s read.
 
 ## Snapshot mode (default, `DATA_MODE=snapshot`)
 - The stream design paid for every trade on every token a wallet touched, roughly $85+ CAD/month. Snapshot mode subscribes only to tracked wallets (`subscribeAccountTrade`) and reads prices from the chain for free.

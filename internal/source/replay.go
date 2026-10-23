@@ -27,6 +27,7 @@ type Replay struct {
 	AfterEach func(at time.Time)
 
 	mu       sync.Mutex
+	paused   bool
 	accounts map[string]bool
 	tokens   map[string]bool
 	stats    Stats
@@ -74,7 +75,7 @@ func (r *Replay) Run(ctx context.Context, h Handler) error {
 		t, ok := ParsePumpPortal(l.Msg, l.At)
 		if ok {
 			r.mu.Lock()
-			deliver := r.accounts[t.Trader] || r.tokens[t.Mint]
+			deliver := !r.paused && (r.accounts[t.Trader] || r.tokens[t.Mint])
 			if deliver {
 				r.stats.Messages++
 				r.stats.LastMessageAt = l.At
@@ -107,6 +108,10 @@ func (r *Replay) SubscribeAccounts(k []string)   { r.set(r.accounts, k, true) }
 func (r *Replay) UnsubscribeAccounts(k []string) { r.set(r.accounts, k, false) }
 func (r *Replay) SubscribeTokens(k []string)     { r.set(r.tokens, k, true) }
 func (r *Replay) UnsubscribeTokens(k []string)   { r.set(r.tokens, k, false) }
+
+// Pause stops delivery, like a closed connection.
+func (r *Replay) Pause()  { r.mu.Lock(); r.paused = true; r.mu.Unlock() }
+func (r *Replay) Resume() { r.mu.Lock(); r.paused = false; r.mu.Unlock() }
 
 func (r *Replay) Stats() Stats {
 	r.mu.Lock()

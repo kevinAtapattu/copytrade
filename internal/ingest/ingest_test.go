@@ -15,7 +15,11 @@ import (
 type fakeSrc struct {
 	source.Replay
 	subT, unsubT, subA, unsubA [][]string
+	pauses, resumes            int
 }
+
+func (f *fakeSrc) Pause()  { f.pauses++ }
+func (f *fakeSrc) Resume() { f.resumes++ }
 
 func (f *fakeSrc) SubscribeTokens(k []string)     { f.subT = append(f.subT, k) }
 func (f *fakeSrc) UnsubscribeTokens(k []string)   { f.unsubT = append(f.unsubT, k) }
@@ -156,8 +160,8 @@ func TestDailyBudgetPausesAndResumes(t *testing.T) {
 	if !st.Paused || st.MessagesToday != 3 {
 		t.Fatalf("expected pause at budget: %+v", st)
 	}
-	if len(src.unsubA) != 1 || len(src.unsubA[0]) != 2 || len(src.unsubT) != 1 {
-		t.Fatalf("pause must drop all subs: accounts %v tokens %v", src.unsubA, src.unsubT)
+	if src.pauses != 1 || len(src.unsubT) != 1 {
+		t.Fatalf("pause must close the connection and stop token reads: pauses %d tokens %v", src.pauses, src.unsubT)
 	}
 	// while paused, reloads must not resubscribe
 	before := len(src.subA)
@@ -175,20 +179,20 @@ func TestDailyBudgetPausesAndResumes(t *testing.T) {
 		t.Fatalf("should resume next day: %+v", st)
 	}
 	last := src.subA[len(src.subA)-1]
-	if len(last) != 2 || len(src.subT) < 2 {
-		t.Fatalf("resume must restore accounts %v and tokens %v", last, src.subT)
+	if src.resumes != 1 || len(last) != 2 || len(src.subT) < 2 {
+		t.Fatalf("resume must reconnect (%d) and restore accounts %v and tokens %v", src.resumes, last, src.subT)
 	}
 }
 
 func TestInitBudgetFromDB(t *testing.T) {
-	in, _, st, _ := setup(t)
+	in, src, st, _ := setup(t)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
 		st.InsertTokenTrade(ctx, tr(string(rune('a'+i)), "X", "buy", 1, time.Duration(i)*time.Minute))
 	}
 	in.Guard = Guard{DailyBudget: 5}
 	in.InitBudget(ctx, t0.Add(time.Hour))
-	if s := in.GuardStats(); !s.Paused || s.MessagesToday != 5 {
+	if s := in.GuardStats(); !s.Paused || s.MessagesToday != 5 || src.pauses != 1 {
 		t.Fatalf("restart over budget should start paused: %+v", s)
 	}
 }

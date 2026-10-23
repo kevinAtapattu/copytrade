@@ -22,6 +22,9 @@ type Source interface {
 	UnsubscribeAccounts(keys []string)
 	SubscribeTokens(keys []string)
 	UnsubscribeTokens(keys []string)
+	// Pause drops the connection until Resume (spending guard).
+	Pause()
+	Resume()
 	Stats() Stats
 }
 

@@ -180,11 +180,15 @@ func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 	}
 	in.mu.Unlock()
 
-	if in.Classify != nil && t.IsTarget {
-		t = in.Classify(ctx, t)
-	}
 	if in.Observer != nil {
-		in.Observer(t)
+		in.Observer(t) // schedule price reads first so they are never delayed
+	}
+	if in.Classify != nil && t.IsTarget {
+		// Runs on the stream's reader goroutine: keep it short. Fail-open; the +2s
+		// read flags anything this misses.
+		cctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		t = in.Classify(cctx, t)
+		cancel()
 	}
 	if subscribe {
 		in.Tokens.SubscribeTokens([]string{t.Mint})

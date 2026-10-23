@@ -32,6 +32,9 @@ type PumpPortal struct {
 	tokens   map[string]bool
 	pending  []ppCommand
 	dirty    chan struct{}
+	paused   bool
+	pauseCh  chan struct{} // wakes the session so it can close
+	resumeCh chan struct{} // wakes Run so it can reconnect
 	stats    Stats
 }
 
@@ -45,6 +48,7 @@ func NewPumpPortal(wsURL, apiKey string) *PumpPortal {
 		URL: wsURL, APIKey: apiKey,
 		MinBackoff: 5 * time.Second, MaxBackoff: 10 * time.Minute, BatchSize: 100,
 		accounts: map[string]bool{}, tokens: map[string]bool{}, dirty: make(chan struct{}, 1),
+		pauseCh: make(chan struct{}, 1), resumeCh: make(chan struct{}, 1),
 	}
 }
 
@@ -96,6 +100,39 @@ func (p *PumpPortal) change(set map[string]bool, keys []string, add bool, method
 
 // Run connects and reads until ctx ends, reconnecting with backoff. Never opens
 // a second connection while one is alive.
+var errPaused = errors.New("paused")
+
+// Pause closes the connection and keeps it closed until Resume. This is how the
+// spending guard stops billing: no connection, no messages, regardless of how
+// PumpPortal treats unsubscribe requests.
+func (p *PumpPortal) Pause() {
+	p.mu.Lock()
+	p.paused = true
+	p.mu.Unlock()
+	signal(p.pauseCh)
+}
+
+// Resume reconnects (one connection) and re-sends every subscription.
+func (p *PumpPortal) Resume() {
+	p.mu.Lock()
+	p.paused = false
+	p.mu.Unlock()
+	signal(p.resumeCh)
+}
+
+func (p *PumpPortal) isPaused() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.paused
+}
+
+func signal(c chan struct{}) {
+	select {
+	case c <- struct{}{}:
+	default:
+	}
+}
+
 func (p *PumpPortal) Run(ctx context.Context, h Handler) error {
 	if p.APIKey == "" {
 		p.setErr("PUMPPORTAL_API_KEY not set; ingest idle")
@@ -105,10 +142,22 @@ func (p *PumpPortal) Run(ctx context.Context, h Handler) error {
 	}
 	backoff := p.MinBackoff
 	for ctx.Err() == nil {
+		for p.isPaused() {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-p.resumeCh:
+			}
+		}
 		started := time.Now()
 		err := p.session(ctx, h)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(err, errPaused) {
+			slog.Warn("pumpportal connection closed: spending guard paused ingest")
+			backoff = p.MinBackoff
+			continue
 		}
 		p.setErr(errString(err))
 		// A session that stayed up a while resets backoff; quick failures grow it.
@@ -208,6 +257,11 @@ func (p *PumpPortal) session(ctx context.Context, h Handler) error {
 		case <-ping.C:
 			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 				return err
+			}
+		case <-p.pauseCh:
+			if p.isPaused() {
+				_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+				return errPaused
 			}
 		case <-p.dirty:
 			if err := p.flush(conn); err != nil {

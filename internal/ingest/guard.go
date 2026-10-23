@@ -11,8 +11,8 @@ import (
 )
 
 // Guard caps what the metered stream can cost.
-//   - DailyBudget: max metered messages per UTC day. When hit, every subscription is
-//     dropped until midnight UTC, then restored automatically.
+//   - DailyBudget: max metered messages per UTC day. When hit, the PumpPortal
+//     connection is closed until midnight UTC, then reopened automatically.
 //   - WalletMaxPerHour: a tracked wallet that trades more than this in a rolling hour is
 //     dropped (status "dropped", reason logged) and unsubscribed. Re-add it from the
 //     dashboard if you still want it.
@@ -49,11 +49,15 @@ func (in *Ingestor) InitBudget(ctx context.Context, now time.Time) error {
 		return err
 	}
 	in.mu.Lock()
-	defer in.mu.Unlock()
 	in.g.day, in.g.today = day, n
-	if in.Guard.DailyBudget > 0 && n >= in.Guard.DailyBudget {
+	over := in.Guard.DailyBudget > 0 && n >= in.Guard.DailyBudget
+	if over {
 		in.g.paused = true
-		slog.Warn("daily message budget already spent; staying paused until midnight UTC", "today", n, "budget", in.Guard.DailyBudget)
+	}
+	in.mu.Unlock()
+	if over {
+		in.Src.Pause() // never connect until midnight UTC
+		slog.Warn("daily message budget already spent; staying disconnected until midnight UTC", "today", n, "budget", in.Guard.DailyBudget)
 	}
 	return nil
 }
@@ -106,18 +110,16 @@ func (in *Ingestor) countMessage(t model.Trade) (pause, warn, spam bool) {
 	return
 }
 
-// pauseAll drops every subscription (budget spent). Tracked/watch state is kept so
-// resume can restore it.
+// pauseAll stops all spending (budget hit) by closing the source connection, so the
+// cap holds no matter how PumpPortal treats unsubscribe requests. Token price reads
+// stop too. Tracked/watch state is kept so resume can restore it.
 func (in *Ingestor) pauseAll(ctx context.Context) {
 	in.mu.Lock()
-	accounts := keys(in.tracked)
 	tokens := keys(in.watch)
 	resume := in.g.day.Add(24 * time.Hour)
 	used, budget := in.g.today, in.Guard.DailyBudget
 	in.mu.Unlock()
-	if len(accounts) > 0 {
-		in.Src.UnsubscribeAccounts(accounts)
-	}
+	in.Src.Pause()
 	if len(tokens) > 0 {
 		in.Tokens.UnsubscribeTokens(tokens)
 	}
@@ -145,11 +147,12 @@ func (in *Ingestor) resumeIfNewDay(ctx context.Context, now time.Time) {
 		return
 	}
 	if len(accounts) > 0 {
-		in.Src.SubscribeAccounts(accounts)
+		in.Src.SubscribeAccounts(accounts) // no-op for ones still in the desired set
 	}
 	if len(tokens) > 0 {
 		in.Tokens.SubscribeTokens(tokens)
 	}
+	in.Src.Resume() // one fresh connection, every subscription re-sent
 	in.emit(ctx, "info", "new UTC day: message budget reset, subscriptions resumed")
 }
 
