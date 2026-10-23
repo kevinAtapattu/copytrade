@@ -15,6 +15,13 @@ type Config struct {
 	DatabaseURL string
 	RedisURL    string
 
+	// Data mode: "snapshot" (account trades only + RPC curve reads, cheap) or
+	// "stream" (account + token trade streams, costs much more).
+	DataMode     string
+	RPCRPS       float64
+	RPCDailyMax  int64
+	MarkInterval time.Duration
+
 	// Ingest
 	PumpPortalAPIKey   string
 	PumpPortalWSURL    string
@@ -86,6 +93,11 @@ func Load() Config {
 	return Config{
 		DatabaseURL: str("DATABASE_URL", "postgres://copytrade:copytrade@localhost:5432/copytrade?sslmode=disable"),
 		RedisURL:    str("REDIS_URL", "redis://localhost:6379"),
+
+		DataMode:     str("DATA_MODE", "snapshot"),
+		RPCRPS:       flt("RPC_RPS", 8),
+		RPCDailyMax:  int64(integer("RPC_DAILY_MAX", 30000)),
+		MarkInterval: dur("MARK_INTERVAL", 30*time.Second),
 
 		PumpPortalAPIKey:   str("PUMPPORTAL_API_KEY", ""),
 		PumpPortalWSURL:    str("PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data"),

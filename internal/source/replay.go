@@ -7,6 +7,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"copytrade/internal/model"
 )
 
 // FixtureLine is one line of a replay file: a raw PumpPortal message and when it arrived.
@@ -48,6 +50,18 @@ func NewReplay(r io.Reader) (*Replay, error) {
 }
 
 func (r *Replay) Len() int { return len(r.lines) }
+
+// Trades returns every trade in the file (ignoring subscriptions), for building
+// a history-backed curve reader.
+func (r *Replay) Trades() []model.Trade {
+	out := make([]model.Trade, 0, len(r.lines))
+	for _, l := range r.lines {
+		if t, ok := ParsePumpPortal(l.Msg, l.At); ok {
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
 func (r *Replay) Run(ctx context.Context, h Handler) error {
 	r.mu.Lock()

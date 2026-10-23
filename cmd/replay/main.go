@@ -29,6 +29,7 @@ func main() {
 	path := flag.String("fixture", "fixtures/replay.jsonl", "JSONL of {at, msg} lines (fixture or ingest RECORD_FILE)")
 	useDB := flag.Bool("db", false, "write to Postgres at DATABASE_URL instead of memory")
 	reset := flag.Bool("reset", false, "with -db: truncate all tables first")
+	mode := flag.String("mode", "stream", "stream: replay every trade; snapshot: only tracked wallets' trades, prices read from the recorded curve history (like DATA_MODE=snapshot)")
 	serve := flag.String("serve", "", "after replay, serve the API on this address (e.g. :8080) for the dashboard")
 	walletsFile := flag.String("wallets", "", "wallets file to seed when there is no .meta.json (default WALLETS_FILE)")
 	flag.Parse()
@@ -73,7 +74,7 @@ func main() {
 	}
 
 	t0 := time.Now()
-	rep, err := pipeline.Run(ctx, c, st, src, pipeline.Options{SolUSD: 150})
+	rep, err := pipeline.Run(ctx, c, st, src, pipeline.Options{SolUSD: 150, Mode: *mode})
 	check(err)
 	fmt.Printf("replayed %d messages (%d delivered after subscription filter) from %s to %s in %s\n",
 		rep.Messages, rep.Delivered, rep.Start.Format(time.DateTime), rep.End.Format(time.DateTime), time.Since(t0).Round(time.Millisecond))

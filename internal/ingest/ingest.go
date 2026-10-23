@@ -41,6 +41,9 @@ type Ingestor struct {
 	MaxWatch time.Duration
 	// Recorder, if set, receives every trade as a replay fixture line (JSONL).
 	Recorder io.Writer
+	// Observer, if set, sees every new trade after IsTarget is known (snapshot mode
+	// uses it to schedule curve reads).
+	Observer func(model.Trade)
 
 	mu      sync.Mutex
 	tracked map[string]bool
@@ -174,6 +177,9 @@ func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 	}
 	in.mu.Unlock()
 
+	if in.Observer != nil {
+		in.Observer(t)
+	}
 	if subscribe {
 		in.Tokens.SubscribeTokens([]string{t.Mint})
 	}

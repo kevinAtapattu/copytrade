@@ -29,6 +29,10 @@ func testConfig() config.Config {
 }
 
 func replay(t *testing.T) (*store.Memory, fixture.Data, Report, config.Config) {
+	return replayMode(t, "stream")
+}
+
+func replayMode(t *testing.T, mode string) (*store.Memory, fixture.Data, Report, config.Config) {
 	t.Helper()
 	c := testConfig()
 	data := fixture.Generate(42, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 21)
@@ -45,7 +49,7 @@ func replay(t *testing.T) (*store.Memory, fixture.Data, Report, config.Config) {
 	for _, w := range data.Meta.Wallets {
 		st.AddWallet(ctx, w)
 	}
-	rep, err := Run(ctx, c, st, src, Options{SolUSD: 150})
+	rep, err := Run(ctx, c, st, src, Options{SolUSD: 150, Mode: mode})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,5 +240,43 @@ func TestCommittedFixtureReplays(t *testing.T) {
 	src, err := source.NewReplay(f)
 	if err != nil || src.Len() == 0 {
 		t.Fatalf("fixture unreadable: %v", err)
+	}
+}
+
+func TestSnapshotModeEndToEnd(t *testing.T) {
+	st, data, rep, _ := replayMode(t, "snapshot")
+	ctx := context.Background()
+	roles := data.Meta.Roles
+	_, _, full, _ := replay(t)
+
+	// Only tracked wallets' own trades are metered: far fewer messages than stream mode.
+	if rep.Delivered != int64(rep.TargetTrades) || rep.Delivered*5 > full.Delivered {
+		t.Fatalf("snapshot mode delivered %d messages (targets %d), stream mode %d", rep.Delivered, rep.TargetTrades, full.Delivered)
+	}
+	if rep.SimTrades != rep.TargetTrades*len(model.Delays) {
+		t.Fatalf("sim fills %d, want 3 x %d", rep.SimTrades, rep.TargetTrades)
+	}
+	sims, _ := st.ListSimTrades(ctx, store.SimFilter{})
+	filled := 0
+	for _, s := range sims {
+		if !s.Skipped {
+			filled++
+		}
+	}
+	if filled == 0 {
+		t.Fatal("no simulated fills priced from snapshots")
+	}
+	w, _, _ := st.GetWallet(ctx, roles.Good)
+	if w.Status != model.StatusLive {
+		t.Errorf("good wallet should be promoted in snapshot mode too: %s (%s)", w.Status, w.Reason)
+	}
+	scores, _ := st.LatestScores(ctx)
+	ix := rotation.Index(scores)
+	if f, _ := ix.Get(roles.Fast, 2, 30); f.PnlUSD >= 0 {
+		t.Errorf("fast flipper should lose at +2s in snapshot mode: %v", f.PnlUSD)
+	}
+	fills, _ := st.ListLiveFills(ctx, store.LiveFilter{})
+	if len(fills) == 0 {
+		t.Error("executor did not trade in snapshot mode")
 	}
 }

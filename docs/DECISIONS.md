@@ -134,3 +134,13 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - `MSG_DAILY_BUDGET` (default 1000/day, about 0.001 SOL/day or roughly $4 CAD/month at most): when hit, every account and token subscription is dropped until midnight UTC, then restored automatically. 80% usage sends a warning alert. After a restart, today's count is restored from the DB, so restarting can't reset the budget.
 - `WALLET_MAX_TRADES_PER_HOUR` (default 30): a tracked wallet over this in a rolling hour is set to `dropped` with reason "spam guard", unsubscribed, and alerted. It stays dropped until you re-add it from the dashboard.
 - PumpPortal may deliver a few messages after an unsubscribe; those are still counted.
+
+## Snapshot mode (default, `DATA_MODE=snapshot`)
+- The stream design paid for every trade on every token a wallet touched, roughly $85+ CAD/month. Snapshot mode subscribes only to tracked wallets (`subscribeAccountTrade`) and reads prices from the chain for free.
+- For each tracked trade on the bonding curve, the snapshotter reads the token's bonding curve account (`getMultipleAccounts`, `processed` commitment) at +2s, +10s and +60s. Each read is published on the trades stream as a `snapshot` trade carrying the reserves, stamped with the intended moment. The simulator and executor needed no changes.
+- Tokens tracked wallets hold are re-read every `MARK_INTERVAL` (30s) in one batched call (up to 100 accounts each), for open-position marks and the executor's stop-loss. Ingest's existing watch/unwatch logic drives this through a `TokenWatcher` interface, so stream and snapshot share it.
+- The curve address comes from PumpPortal's `bondingCurveKey`. If missing, it is derived as the PDA `["bonding-curve", mint]` of the pump program.
+- A completed (migrated) curve is published with `pool=migrated`, so the simulator stops new buys and prices exits at the last curve state, as before.
+- RPC is rate-limited (`RPC_RPS`, 8/s) and counted per UTC day. Over `RPC_DAILY_MAX` (30k), periodic marks pause; fill reads never do. Expected use is a few thousand calls a day, well within Helius free (1M/month).
+- Accuracy: a read reflects the chain about 0.25s plus RPC latency after the intended moment. Stream mode instead used the last trade before the moment. Both are within the simulator's 3s grace window.
+- Replay supports both modes. `-mode snapshot` delivers only tracked wallets' trades and answers curve reads from the recorded history. On the fixture it reaches the same promotions and demotions with 329 metered messages instead of 4,255.
