@@ -4,6 +4,8 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -26,6 +28,8 @@ type Ingestor struct {
 	Bus      bus.Bus
 	Cooldown time.Duration
 	MaxWatch time.Duration
+	// Recorder, if set, receives every trade as a replay fixture line (JSONL).
+	Recorder io.Writer
 
 	mu      sync.Mutex
 	tracked map[string]bool
@@ -93,6 +97,10 @@ func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 		return
 	}
 	in.rate.add(t.ReceivedAt)
+	if in.Recorder != nil {
+		line, _ := json.Marshal(source.FixtureLine{At: t.ReceivedAt, Msg: source.EncodePumpPortal(t)})
+		_, _ = in.Recorder.Write(append(line, '\n'))
+	}
 	t.IsTarget = in.tracked[t.Trader]
 	var subscribe bool
 	if t.IsTarget {

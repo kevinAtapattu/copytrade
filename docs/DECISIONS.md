@@ -106,3 +106,18 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - It alerts on executor fills, failures, rejections and kill-switch changes, plus rotations, discovery adds and service errors. Simulated fills and raw target trades are excluded because they would flood the chat.
 - Messages are paced at 1/sec with a 100-message queue. Overflow is dropped and counted in health.
 - Without `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, alerts only go to the log.
+
+## Testing + replay
+- `internal/pipeline` wires ingest, simulator, executor (paper, synchronous), scorer and discovery on an in-memory bus and store, driven by a replay source in event time. `cmd/replay` and the end-to-end test share it, so what is tested is what runs.
+- The replay source honors subscriptions exactly like PumpPortal. It only delivers trades by subscribed wallets or on subscribed tokens, so auto-subscribe and the entry race are exercised (about 1/3 of fixture messages are filtered out).
+- `fixtures/replay.jsonl` comes from `internal/fixture` (seed 42, 21 days, about 6k trades) with scripted wallets. The e2e test regenerates the same data in memory and asserts:
+  - Good is promoted only after 14 days.
+  - Lucky is blocked by the one-trade rule.
+  - Fast (flips within 3s) loses at +2s.
+  - Draw (starts live) gets demoted on drawdown.
+  - Idle is auto-dropped.
+  - Two early buyers on 5x tokens are discovered.
+  - The executor copies only while a wallet is live.
+  - sim fills = 3 x target trades.
+- `RECORD_FILE=path` on ingest appends every live trade in the same JSONL format, so real sessions can be replayed later with `go run ./cmd/replay -fixture path -wallets wallets.txt`.
+- The live trader is tested against fake PumpPortal and RPC HTTP servers: request shape, local signature verifies, confirm, balance-delta parsing, and 3 fresh rebuilds on on-chain failure. The PumpPortal websocket client is tested against a fake websocket server: one connection at a time, resubscribe after reconnect, handler can subscribe without deadlock.

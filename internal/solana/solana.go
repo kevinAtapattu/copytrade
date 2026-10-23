@@ -48,7 +48,7 @@ func ParseKeypair(s string) (Keypair, error) {
 	}
 	switch len(raw) {
 	case 64:
-		pk := ed25519.PrivateKey(raw)
+		pk := ed25519.NewKeyFromSeed(raw[:32])
 		pub := pk.Public().(ed25519.PublicKey)
 		if !bytes.Equal(pub, raw[32:]) {
 			return Keypair{}, errors.New("keypair: public half does not match secret")

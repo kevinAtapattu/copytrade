@@ -3,6 +3,8 @@
 package main
 
 import (
+	"log/slog"
+	"os"
 	"time"
 
 	"copytrade/internal/app"
@@ -16,6 +18,15 @@ func main() {
 
 	src := source.NewPumpPortal(a.Cfg.PumpPortalWSURL, a.Cfg.PumpPortalAPIKey)
 	in := ingest.New(src, a.Store, a.Bus, a.Cfg.TokenUnsubCooldown, a.Cfg.TokenMaxWatch)
+	if path := os.Getenv("RECORD_FILE"); path != "" {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			app.Fatal("open RECORD_FILE", err)
+		}
+		defer f.Close()
+		in.Recorder = f
+		slog.Info("recording trades for replay", "file", path)
+	}
 
 	a.Heartbeat(10*time.Second, func() any {
 		s := src.Stats()
