@@ -81,3 +81,22 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - There are no data-fetching libraries. A small `useApi` hook refetches every 15s, and on live SSE events (throttled to once per 2s).
 - Dark only. Chart series use the first three slots of the validated reference palette, dark steps (blue/orange/aqua, all checks pass on `#1a1a19`). PnL numbers carry a +/- sign as well as color.
 - The add/remove/promote/bench buttons call the API directly. Removing a wallet sets it to `dropped` (history is kept, and you can re-add it).
+
+## Executor
+- PAPER is the default. Only `LIVE_TRADING=true` plus a valid `TRADER_PRIVATE_KEY` builds the live trader. With LIVE_TRADING=true and no key, the executor refuses to start.
+- Paper fills hit the curve state at the moment the target trade arrives. They pay the same fees a live trade would: pump.fun 1.25% + PumpPortal local API 0.5% + base fee + priority fee (+ Jito tip if set).
+- Live trades go through PumpPortal `trade-local`. The tx is signed locally with stdlib ed25519 (a small hand-rolled wire-format parser for legacy and v0 messages, no big Solana SDK) and sent through `SOLANA_RPC_URL` with `skipPreflight` and `maxRetries: 0`.
+- With `JITO_TIP_SOL > 0`, the request uses the bundle form (an array body, where the first tx's priorityFee is the tip) and goes to the Jito block engine via `sendBundle`.
+- Retries rebuild the tx from PumpPortal, which brings a fresh blockhash. A retry is sent only after the previous tx failed on-chain or its blockhash stopped being valid without the tx landing. That rules out double buys. A tx that landed but can't be read is not retried.
+- Real fills are read from `getTransaction` balance deltas: SOL change (including the network fee) and the token balance change for our wallet.
+- Sells use PumpPortal's percentage form (`"37.50%"`), so we mirror the target's percentage of our actual on-chain balance.
+- Risk controls:
+  - Fixed `EXEC_SIZE_USD`, one position per (wallet, token).
+  - `MAX_OPEN_POSITIONS` counts in-flight buys too.
+  - Stop-loss: when the curve value of the remaining tokens drops below cost basis by `STOP_LOSS_PCT`, sell 100%.
+  - Daily loss limit: UTC-day realized PnL at or below `-DAILY_LOSS_LIMIT_USD` blocks new buys.
+  - Kill switch (dashboard, stored in `settings`, polled every 5s) blocks new buys. Exits and stop-losses still run, so you are never stuck in a position.
+- Blocked buys are recorded as `rejected` fills with the reason, so the dashboard shows what was skipped and why.
+- Target trades older than 30s when consumed (backlog after a restart) are not copied.
+- Each (wallet, token) gets its own ordered worker goroutine. A slow live tx never blocks the stream, and a sell can't overtake its buy.
+- The live-vs-sim gap: the API joins each executor fill to the simulator's fill for the same target trade at +2s. The dashboard shows the price gap per fill and on average.

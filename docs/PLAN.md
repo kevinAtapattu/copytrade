@@ -37,9 +37,9 @@ PumpPortal / Helius stream
 2-3 wallets positive for 2+ weeks at +2s delay after costs.
 
 ## Phase 4: Live ($500)
-- [ ] executor on event bus, live wallets only
-- [ ] fixed $25 size, max open positions, stop-loss, daily loss limit, kill switch
-- [ ] live vs simulated comparison per trade
+- [x] executor on event bus, live wallets only
+- [x] fixed $25 size, max open positions, stop-loss, daily loss limit, kill switch
+- [x] live vs simulated comparison per trade
 
 ## Phase 5: Scale
 - capital in steps, gRPC + Jito + VPS near validators, maybe Rust executor

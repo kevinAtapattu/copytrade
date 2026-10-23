@@ -487,6 +487,7 @@ func (s *Server) trades(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err)
 		return
 	}
+	s.attachSim(ctx, lf)
 	writeJSON(w, 200, map[string]any{"target_trades": tt, "sim_trades": st, "live_fills": lf})
 }
 
@@ -595,6 +596,7 @@ func (s *Server) executor(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err)
 		return
 	}
+	s.attachSim(ctx, fills)
 	pos, _ := s.Store.ListLivePositions(ctx, store.LiveFilter{Since: now.AddDate(0, 0, -30)})
 	day := now.UTC().Truncate(24 * time.Hour)
 	var dayPnl, gapSum float64
@@ -629,6 +631,26 @@ func (s *Server) executor(w http.ResponseWriter, r *http.Request) {
 		// positive = worse than simulated
 		"avg_gap_vs_sim_pct": avgGap, "gap_samples": gapN,
 	})
+}
+
+// attachSim fills in what the simulator got for the same target trade at the
+// rotation delay, so the dashboard can show the live-vs-sim gap.
+func (s *Server) attachSim(ctx context.Context, fills []model.LiveFill) {
+	for i := range fills {
+		f := &fills[i]
+		if f.SimFillPrice > 0 || f.TargetSig == "" || f.Reason != "copy" {
+			continue
+		}
+		sims, err := s.Store.SimTradesForTarget(ctx, f.TargetSig)
+		if err != nil {
+			continue
+		}
+		for _, x := range sims {
+			if x.DelayS == s.Cfg.RotationDelayS && x.Wallet == f.Wallet && !x.Skipped {
+				f.SimFillPrice = x.FillPrice
+			}
+		}
+	}
 }
 
 func (s *Server) kill(w http.ResponseWriter, r *http.Request) {
