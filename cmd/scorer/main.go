@@ -4,6 +4,7 @@ package main
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"copytrade/internal/app"
@@ -14,9 +15,12 @@ func main() {
 	a := app.Start("scorer")
 	defer a.Close()
 
+	var mu sync.Mutex
 	var lastRun time.Time
 	var lastScores, lastChanges int
 	a.Heartbeat(30*time.Second, func() any {
+		mu.Lock()
+		defer mu.Unlock()
 		return map[string]any{"last_run": lastRun, "scores": lastScores, "rotations": lastChanges}
 	})
 
@@ -29,7 +33,9 @@ func main() {
 			slog.Error("score run", "err", err)
 			jobs.EmitError(a.Ctx, a.Bus, "scorer", err)
 		} else {
+			mu.Lock()
 			lastRun, lastScores, lastChanges = now, len(scores), len(changes)
+			mu.Unlock()
 			slog.Info("scored", "scores", len(scores), "rotations", len(changes), "took", time.Since(now).Round(time.Millisecond))
 		}
 		select {

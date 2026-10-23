@@ -57,3 +57,14 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
   - The best scores fill free slots, up to `LIVE_MAX` (3).
 - "Positive for 2+ weeks" is read as positive over both the rolling 14d and 30d windows, with at least 14 days of history. That is less brittle than requiring every daily snapshot to be positive.
 - Every status change goes to the `rotations` table and the events stream, which feeds the dashboard and Telegram.
+
+## Discovery
+- A token qualifies when `max_price / first_price >= 5` (`DISCOVERY_MULT`), measured from the first trade we observed. It is scanned once, then marked `discovered`.
+- We only see trades after a tracked wallet entered, since that is when we subscribe. "Early" therefore means relative to our first observation: the wallet's first buy was at or below 1.5x our first seen price (`DISCOVERY_EARLY_MULT`). Helius history could widen this later.
+- "Exited well" means an average exit of at least 2x the average entry (`DISCOVERY_EXIT_MULT`), with at least 50% of the bought tokens sold.
+- Wallets with hits on 2+ distinct 5x tokens (`DISCOVERY_MIN_HITS`) join the bench with `source=discovery` and a reason listing the tokens and the average exit multiple.
+- Wallets already known, including dropped ones, are not re-added automatically. You can re-add them from the dashboard.
+- Auto-drop runs after each discovery pass and applies to bench wallets only:
+  - No trade for `DROP_INACTIVE_DAYS` (7).
+  - 30d sim PnL <= `DROP_BAD_PNL_USD` (-$50) over >= 15 trades.
+  - When the bench exceeds `BENCH_MAX` (50), the lowest 14d scores are dropped.
