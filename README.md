@@ -12,12 +12,12 @@ See `docs/PLAN.md` for phases, `docs/DECISIONS.md` for every judgment call, `CLA
 ## Architecture
 
 ```
-                 PumpPortal websocket (ONE connection)
-                 subscribeAccountTrade: tracked wallets
-                 subscribeTokenTrade:   tokens they touch
-                              |
-                        +-----v------+      RECORD_FILE (optional JSONL,
-                        |   ingest   |----> replayable later)
+   PumpPortal websocket (ONE connection)          Solana RPC (Helius free tier)
+   subscribeAccountTrade: tracked wallets         bonding curve reads at +2/+10/+60s
+   (paid per message, spending guard)             and every 30s for held tokens
+                              |                         |
+                        +-----v------+  <---------------+
+                        |   ingest   |----> RECORD_FILE (optional JSONL, replayable)
                         +-----+------+
              persist raw      |      publish
         +---------------------+----------------------+
@@ -43,6 +43,19 @@ See `docs/PLAN.md` for phases, `docs/DECISIONS.md` for every judgment call, `CLA
 ```
 
 Every service is its own process with its own consumer group, so each can be scaled or swapped on its own. `internal/source.Source` is the seam for a future Helius gRPC / LaserStream source.
+
+**Data modes.** The default, `DATA_MODE=snapshot`, pays PumpPortal only for your wallets' own trades (about 1 message per trade). It reads token prices straight from each token's bonding curve over RPC, for free. `DATA_MODE=stream` also subscribes to every trade on every token your wallets hold. That costs 10-50x more, so only use it if you need the full tape.
+
+**Spending guard.** Ingest meters every PumpPortal message. When `MSG_DAILY_BUDGET` (default 1000/day, at most about 0.001 SOL/day) is hit, all subscriptions pause until midnight UTC. A wallet trading more than `WALLET_MAX_TRADES_PER_HOUR` (default 30) is dropped automatically. The Health page shows both.
+
+## What it costs to run (snapshot mode)
+
+| Item | Cost |
+|---|---|
+| PumpPortal: ~1 message per tracked-wallet trade (0.01 SOL per 10k) | about 0.01 SOL/month for 15 wallets (~$1-2 CAD) |
+| PumpPortal: balance it requires in its linked wallet | 0.02 SOL (~$3 CAD), held, not spent |
+| Helius free tier (prices, discovery) | $0 (a few thousand of the 1M monthly credits) |
+| Hard ceiling from the default budget | 1000 msgs/day = 0.03 SOL/month (~$4 CAD) |
 
 ## Try it now, no keys and no Docker
 
@@ -123,22 +136,29 @@ Never run two ingest instances against the same API key. PumpPortal bans clients
 - Executor risk controls (kill switch, max open, stop-loss, daily loss limit)
 - Full end-to-end replay, plus the API on top of it
 
+**Verified against mainnet** (`go run ./cmd/livecheck`: one short free PumpPortal connection plus public RPC; no key, no cost):
+- PumpPortal's real message format
+- Bonding curve address derivation (6/6)
+- Curve account parsing
+- pump.fun TradeEvent decoding (10/10 consistent)
+- It also found two things now handled: pump.fun tokens priced in non-SOL quote tokens (skipped), and Solana v1 transactions (read OK, refused for signing)
+
 **Also verified by hand:**
 - Replay into a real Postgres 16 gives identical results to the in-memory store
 - Every API endpoint and the dashboard (all pages, SSE through the Next.js proxy) render on that data
 - `docker compose config` validates
 
 **Untested until keys/Docker exist:**
-- The real PumpPortal message format. Built from docs plus community examples, parsed leniently. Watch the ingest logs for the first frames.
+- The paid `subscribeAccountTrade` stream (same message format as the verified free stream)
 - Real `trade-local` responses and on-chain fills
 - Jito bundle submission
-- Telegram delivery
+- Discord / Telegram delivery
 - The Docker image build and `compose up` (Docker Desktop needs its first-launch approval)
 - CoinGecko price fetch (falls back to `SOL_USD_FALLBACK`)
 
 ## Going live, step by step
 
-1. Do Prereqs, fill `PUMPPORTAL_API_KEY`, add wallets, `make up`. Check Health: PumpPortal "connected", messages flowing.
+1. Do Prereqs, fill `PUMPPORTAL_API_KEY` and `SOLANA_RPC_URL` (Helius), add wallets, then `go run ./cmd/livecheck` to confirm both work. Then `make up`. Check Health: PumpPortal "connected", data mode "snapshot", budget counting up, RPC calls counting up.
 2. Let it paper-track for 2+ weeks. The scorer promotes wallets to live only when they are positive over 14d and 30d at +2s, not driven by one trade, with 10+ trades and under 25% drawdown. Meanwhile the executor paper-trades live wallets (`LIVE_TRADING=false`).
 3. Go/no-go (from PLAN.md): 2-3 wallets positive for 2+ weeks at +2s after costs, and the Executor page's "gap vs sim" is small.
 4. Create a fresh hot wallet (Phantom or `solana-keygen new`), fund it with the $500 play money plus about 0.05 SOL for fees. Put its secret key in `TRADER_PRIVATE_KEY` and set a paid `SOLANA_RPC_URL`.
@@ -151,8 +171,8 @@ Fill these in `.env` (copy from `.env.example`). Everything else has working def
 
 | Variable | Needed for | Where to get it |
 |---|---|---|
-| `PUMPPORTAL_API_KEY` | **Required** for any live data | pumpportal.fun, "Create API Key" (Data API docs). It generates a key plus a linked wallet; fund that wallet with **at least 0.02 SOL** (streams cost 0.01 SOL per 10k messages; the Health page estimates usage). |
-| `SOLANA_RPC_URL` | Live trading (sending and confirming txs) | Helius (helius.dev), Triton, or QuickNode free/paid tier. The public mainnet RPC rate-limits sends. |
+| `PUMPPORTAL_API_KEY` | **Required** for any live data | pumpportal.fun, "Create API Key" (Data API docs). It generates a key plus a linked wallet; fund that wallet with **at least 0.02 SOL**; 0.05 SOL covers months in snapshot mode (0.01 SOL per 10k messages; the Health page shows usage). |
+| `SOLANA_RPC_URL` | **Required** in snapshot mode (prices + discovery), and for live trading | helius.dev: sign up (no card), copy the mainnet RPC URL (`https://mainnet.helius-rpc.com/?api-key=...`). The free tier (1M credits/month, 10 req/s) is plenty. The public RPC works for prices but throttles discovery. |
 | `TRADER_PRIVATE_KEY` | Live trading only | Your **new, small** hot wallet's secret key: base58 export from Phantom/Solflare, or the JSON array from `solana-keygen new -o key.json`. Never your main wallet. |
 | `LIVE_TRADING` | Live trading only | Set to `true` only when you are ready (step 5 above). |
 | `DISCORD_WEBHOOK_URL` | Optional alerts | In Discord: a channel's settings (gear) > Integrations > Webhooks > New Webhook > Copy Webhook URL. Treat the URL like a password. |

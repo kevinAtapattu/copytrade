@@ -15,6 +15,10 @@ const EXPECTED = ["ingest", "simulator", "scorer", "discovery", "api", "executor
 export default function HealthPage() {
   const { data, error } = useApi<Health>("health", 5000);
   const ing = data?.services?.ingest?.data as Record<string, unknown> | undefined;
+  const guard = ing?.guard as { messages_today: number; daily_budget: number; paused: boolean; resumes_at?: string; wallet_max_per_hour: number } | undefined;
+  const snap = ing?.snapshot as { watched_tokens: number; pending_reads: number; curve_reads: number; read_errors: number; last_error?: string } | undefined;
+  const rpcToday = ing?.rpc_calls_today as number | undefined;
+  const rpcMax = ing?.rpc_daily_max as number | undefined;
   const rows = EXPECTED.map((name) => ({ name, svc: data?.services?.[name] }));
   return (
     <>
@@ -28,6 +32,16 @@ export default function HealthPage() {
         <Stat label="Failed tx (24h)" value={data?.failed_tx_24h ?? 0} hint={`${data?.live_fills_24h ?? 0} executor fills`} />
         <Stat label="PumpPortal SOL used today" value={`${num(data?.est_sol_today, 4)} SOL`}
           hint={`${num(data?.messages_today, 0)} msgs · ~${num(data?.est_sol_month, 3)} SOL/month at 24h rate`} />
+      </div>
+      <div className="grid stats" style={{ marginTop: 14 }}>
+        <Stat label="Data mode" value={String(ing?.mode ?? "-")}
+          hint={ing?.mode === "snapshot" ? "paying for wallet trades only, prices via RPC" : ing?.mode === "stream" ? "paying for every trade on held tokens" : "ingest not running"} />
+        <Stat label="Message budget today"
+          value={guard ? (guard.paused ? "PAUSED" : `${num(guard.messages_today, 0)} / ${num(guard.daily_budget, 0)}`) : "-"}
+          tone={guard?.paused ? -1 : undefined}
+          hint={guard ? (guard.paused ? `budget hit, resumes ${new Date(guard.resumes_at!).toLocaleString()}` : `max ~${num(guard.daily_budget / 10000 * 0.01, 4)} SOL/day · wallets over ${guard.wallet_max_per_hour} trades/h get dropped`) : ""} />
+        <Stat label="RPC calls today (prices)" value={rpcToday != null ? `${num(rpcToday, 0)} / ${num(rpcMax, 0)}` : "-"}
+          hint={snap ? `${snap.watched_tokens} tokens priced every mark · ${snap.read_errors} read errors${snap.last_error ? `: ${snap.last_error}` : ""}` : ""} />
       </div>
       <div className="card" style={{ marginTop: 14 }}>
         <h3>Services</h3>
@@ -45,6 +59,6 @@ export default function HealthPage() {
 
 function fmt(d: Record<string, unknown>) {
   return Object.entries(d || {})
-    .map(([k, v]) => `${k}=${typeof v === "number" ? num(v, 3) : typeof v === "string" && v.match(/^\d{4}-/) ? ago(v) : String(v)}`)
+    .map(([k, v]) => `${k}=${typeof v === "number" ? num(v, 3) : typeof v === "string" && v.match(/^\d{4}-/) ? ago(v) : v && typeof v === "object" ? JSON.stringify(v) : String(v)}`)
     .join("  ");
 }
