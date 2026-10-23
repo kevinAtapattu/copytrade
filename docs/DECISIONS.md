@@ -100,3 +100,9 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - Target trades older than 30s when consumed (backlog after a restart) are not copied.
 - Each (wallet, token) gets its own ordered worker goroutine. A slow live tx never blocks the stream, and a sell can't overtake its buy.
 - The live-vs-sim gap: the API joins each executor fill to the simulator's fill for the same target trade at +2s. The dashboard shows the price gap per fill and on average.
+
+## Alerts
+- A separate `alerter` process consumes the `events` stream (its own consumer group), so alerting can never slow down trading.
+- It alerts on executor fills, failures, rejections and kill-switch changes, plus rotations, discovery adds and service errors. Simulated fills and raw target trades are excluded because they would flood the chat.
+- Messages are paced at 1/sec with a 100-message queue. Overflow is dropped and counted in health.
+- Without `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, alerts only go to the log.
