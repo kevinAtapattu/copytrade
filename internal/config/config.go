@@ -23,17 +23,18 @@ type Config struct {
 	MarkInterval time.Duration
 
 	// Ingest
-	PumpPortalAPIKey   string
-	PumpPortalWSURL    string
-	WalletsFile        string
-	TokenUnsubCooldown time.Duration
-	TokenMaxWatch      time.Duration
-	WalletReload       time.Duration
-	MsgDailyBudget     int64
-	WalletSource       string  // "helius" (logsSubscribe, sees every terminal) or "pumpportal"
-	HeliusWSURL        string  // default: SOLANA_RPC_URL with wss://
-	HeliusWSDailyMB    float64 // data cap per UTC day for the Helius stream
-	WalletMaxPerDay    int
+	PumpPortalAPIKey    string
+	PumpPortalWSURL     string
+	WalletsFile         string
+	TokenUnsubCooldown  time.Duration
+	TokenMaxWatch       time.Duration
+	WalletReload        time.Duration
+	MsgDailyBudget      int64
+	WalletSource        string  // "helius" (logsSubscribe, sees every terminal) or "pumpportal"
+	HeliusWSURL         string  // default: SOLANA_RPC_URL with wss://
+	HeliusWSDailyMB     float64 // data cap per UTC day for the Helius stream
+	HeliusWalletDailyMB float64 // per-wallet data cap per UTC day (bot-noise guard)
+	WalletMaxPerDay     int
 
 	// Simulation
 	CopySizeUSD    float64
@@ -111,17 +112,18 @@ func Load() Config {
 		RPCDailyMax:  int64(integer("RPC_DAILY_MAX", 30000)),
 		MarkInterval: dur("MARK_INTERVAL", 30*time.Second),
 
-		PumpPortalAPIKey:   str("PUMPPORTAL_API_KEY", ""),
-		PumpPortalWSURL:    str("PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data"),
-		WalletsFile:        str("WALLETS_FILE", "wallets.txt"),
-		TokenUnsubCooldown: dur("TOKEN_UNSUB_COOLDOWN", 5*time.Minute),
-		TokenMaxWatch:      dur("TOKEN_MAX_WATCH", 24*time.Hour),
-		WalletReload:       dur("WALLET_RELOAD_INTERVAL", 30*time.Second),
-		MsgDailyBudget:     int64(integer("MSG_DAILY_BUDGET", 1000)),
-		WalletSource:       str("WALLET_SOURCE", "helius"),
-		HeliusWSURL:        str("HELIUS_WS_URL", ""),
-		HeliusWSDailyMB:    flt("HELIUS_WS_DAILY_MB", 150),
-		WalletMaxPerDay:    integer("WALLET_MAX_TRADES_PER_DAY", 1000),
+		PumpPortalAPIKey:    str("PUMPPORTAL_API_KEY", ""),
+		PumpPortalWSURL:     str("PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data"),
+		WalletsFile:         str("WALLETS_FILE", "wallets.txt"),
+		TokenUnsubCooldown:  dur("TOKEN_UNSUB_COOLDOWN", 5*time.Minute),
+		TokenMaxWatch:       dur("TOKEN_MAX_WATCH", 24*time.Hour),
+		WalletReload:        dur("WALLET_RELOAD_INTERVAL", 30*time.Second),
+		MsgDailyBudget:      int64(integer("MSG_DAILY_BUDGET", 1000)),
+		WalletSource:        str("WALLET_SOURCE", "helius"),
+		HeliusWSURL:         str("HELIUS_WS_URL", ""),
+		HeliusWSDailyMB:     flt("HELIUS_WS_DAILY_MB", 150),
+		HeliusWalletDailyMB: flt("HELIUS_WALLET_DAILY_MB", 10),
+		WalletMaxPerDay:     integer("WALLET_MAX_TRADES_PER_DAY", 1000),
 
 		CopySizeUSD:    flt("COPY_SIZE_USD", 25),
 		PumpFeePct:     flt("PUMP_FEE_PCT", 1.25),

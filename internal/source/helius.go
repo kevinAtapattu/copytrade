@@ -32,6 +32,12 @@ type Helius struct {
 	Chain ChainReader
 	// DailyMB caps streamed data per UTC day; over it the stream pauses until midnight.
 	DailyMB float64
+	// WalletDailyMB caps one wallet's data per UTC day. Other copy-trading bots put
+	// popular wallets' addresses in thousands of (mostly failed) txs a minute, and
+	// Helius bills for each one. Over the cap the wallet is unsubscribed and
+	// OnNoisy is called, so one noisy wallet can't use up DailyMB for everyone.
+	WalletDailyMB float64
+	OnNoisy       func(wallet string, mb float64)
 
 	MinBackoff, MaxBackoff time.Duration
 
@@ -44,6 +50,7 @@ type Helius struct {
 	stats    Stats
 	day      time.Time
 	bytes    int64
+	byWallet map[string]int64 // today's bytes per wallet
 }
 
 // ChainReader is the slice of the RPC client Helius needs.
@@ -105,10 +112,31 @@ func (h *Helius) count(n int, now time.Time) (over bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if d := now.UTC().Truncate(24 * time.Hour); !d.Equal(h.day) {
-		h.day, h.bytes = d, 0
+		h.day, h.bytes, h.byWallet = d, 0, nil
 	}
 	h.bytes += int64(n)
 	return h.DailyMB > 0 && float64(h.bytes) >= h.DailyMB*1e6
+}
+
+// countWallet adds n bytes to wallet's day. The first time the wallet goes over
+// WalletDailyMB it is dropped from the subscription set and noisy=true.
+// Caller has called count for the same frame (which resets the day).
+func (h *Helius) countWallet(wallet string, n int) (noisy bool, mb float64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.WalletDailyMB <= 0 || !h.accounts[wallet] {
+		return false, 0
+	}
+	if h.byWallet == nil {
+		h.byWallet = map[string]int64{}
+	}
+	h.byWallet[wallet] += int64(n)
+	mb = float64(h.byWallet[wallet]) / 1e6
+	if mb < h.WalletDailyMB {
+		return false, mb
+	}
+	delete(h.accounts, wallet)
+	return true, mb
 }
 
 func (h *Helius) isPaused() bool {
@@ -337,6 +365,18 @@ func (h *Helius) session(ctx context.Context, work chan<- note) error {
 				continue
 			}
 			w := walletOf[m.Params.Subscription]
+			if w != "" {
+				if noisy, mb := h.countWallet(w, len(f.data)); noisy {
+					slog.Warn("helius: wallet over its daily data cap, unsubscribing", "wallet", w, "mb", mb)
+					if err := resync(); err != nil {
+						return err
+					}
+					if h.OnNoisy != nil {
+						go h.OnNoisy(w, mb)
+					}
+					continue
+				}
+			}
 			v := m.Params.Result.Value
 			if w == "" || v.Err != nil || v.Signature == "" {
 				continue // unknown sub, or a failed tx

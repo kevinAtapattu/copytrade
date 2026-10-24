@@ -37,6 +37,14 @@ func main() {
 		src = source.NewHelius(ws, lookup, a.Cfg.HeliusWSDailyMB)
 	}
 	in := ingest.New(src, a.Store, a.Bus, a.Cfg.TokenUnsubCooldown, a.Cfg.TokenMaxWatch)
+	if h, ok := src.(*source.Helius); ok {
+		h.WalletDailyMB = a.Cfg.HeliusWalletDailyMB
+		h.OnNoisy = func(w string, mb float64) {
+			ctx, cancel := context.WithTimeout(a.Ctx, 10*time.Second)
+			defer cancel()
+			in.PauseNoisy(ctx, w, mb, a.Cfg.HeliusWalletDailyMB, time.Now())
+		}
+	}
 	if a.Cfg.DiscoverySeedMigrations {
 		pp.OnMigration = func(m source.Migration) {
 			// Off the reader goroutine; migrations arrive a few per minute at most.
@@ -112,6 +120,7 @@ func main() {
 			"pumpportal_messages":  ps.Messages,
 			"bytes_today":          s.BytesToday,
 			"helius_daily_mb":      a.Cfg.HeliusWSDailyMB,
+			"helius_wallet_mb":     a.Cfg.HeliusWalletDailyMB,
 			"connected":            s.Connected,
 			"reconnects":           s.Reconnects,
 			"last_message_at":      s.LastMessageAt,

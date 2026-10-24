@@ -142,3 +142,70 @@ func sellFraction(t model.Trade) float64 {
 	before := t.NewTokenBalance + t.TokenAmount
 	return t.TokenAmount / before
 }
+
+func TestHeliusUnsubscribesNoisyWallet(t *testing.T) {
+	up := websocket.Upgrader{}
+	subscribed := make(chan struct{}, 1)
+	unsubscribed := make(chan struct{}, 1)
+	var mu sync.Mutex
+	var conn *websocket.Conn
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		for {
+			var req struct {
+				ID     int    `json:"id"`
+				Method string `json:"method"`
+			}
+			if c.ReadJSON(&req) != nil {
+				return
+			}
+			switch req.Method {
+			case "logsSubscribe":
+				mu.Lock()
+				conn = c
+				c.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": 77})
+				mu.Unlock()
+				subscribed <- struct{}{}
+			case "logsUnsubscribe":
+				unsubscribed <- struct{}{}
+			}
+		}
+	}))
+	defer srv.Close()
+
+	h := NewHelius("ws"+strings.TrimPrefix(srv.URL, "http"), fakeChain{}, 0)
+	h.WalletDailyMB = 0.001 // 1 KB
+	noisy := make(chan string, 1)
+	h.OnNoisy = func(w string, mb float64) { noisy <- w }
+	h.SubscribeAccounts([]string{hWallet})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go h.Run(ctx, func(model.Trade) {})
+	<-subscribed
+	junk := strings.Repeat("Program BevFQ2 failed ", 30)
+	for i := 0; i < 3; i++ {
+		mu.Lock()
+		conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "method": "logsNotification", "params": map[string]any{
+			"subscription": 77, "result": map[string]any{"value": map[string]any{"signature": "S", "err": "x", "logs": []string{junk}}}}})
+		mu.Unlock()
+	}
+	select {
+	case w := <-noisy:
+		if w != hWallet {
+			t.Fatalf("noisy %s", w)
+		}
+	case <-ctx.Done():
+		t.Fatal("noisy wallet not reported")
+	}
+	select {
+	case <-unsubscribed:
+	case <-ctx.Done():
+		t.Fatal("noisy wallet not unsubscribed")
+	}
+	if st := h.Stats(); st.Accounts != 0 {
+		t.Fatalf("still tracking %d accounts", st.Accounts)
+	}
+}

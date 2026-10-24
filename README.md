@@ -44,7 +44,7 @@ See `docs/PLAN.md` for phases, `docs/DECISIONS.md` for every judgment call, `CLA
 
 Every service is its own process with its own consumer group, so each can be scaled or swapped on its own. `internal/source.Source` is the seam for a future Helius gRPC / LaserStream source.
 
-**Where wallet trades come from.** By default (`WALLET_SOURCE=helius`) each tracked wallet is watched through Helius `logsSubscribe` on your free Helius key. It sees trades from every trading terminal, with about 1 second of lag, at no cost. PumpPortal's own wallet stream missed trades from popular terminals, so it now only carries the free graduated-token feed. See DECISIONS.md.
+**Where wallet trades come from.** By default (`WALLET_SOURCE=helius`) each tracked wallet is watched through Helius `logsSubscribe` on your free Helius key. It sees trades from every trading terminal, with about 1 second of lag, at no cost. PumpPortal's own wallet stream missed trades from popular terminals, so it now only carries the free graduated-token feed. See DECISIONS.md. Some wallets are mentioned in thousands of other bots' txs a minute; a wallet over `HELIUS_WALLET_DAILY_MB` of data in a day is paused until the next UTC midnight so it can't use up the daily cap.
 
 **Data modes.** The default, `DATA_MODE=snapshot`, pays PumpPortal only for your wallets' own trades (about 1 message per trade). It reads token prices straight from each token's bonding curve over RPC, for free. `DATA_MODE=stream` also subscribes to every trade on every token your wallets hold. That costs 10-50x more, so only use it if you need the full tape.
 
