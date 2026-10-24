@@ -8,6 +8,9 @@ const (
 	StatusLive    = "live"
 	StatusBench   = "bench"
 	StatusDropped = "dropped"
+	// StatusPaused: temporarily not tracked (spam guard). Stays visible and
+	// returns to bench automatically after Guard.SpamPause.
+	StatusPaused = "paused"
 )
 
 // Wallet sources.

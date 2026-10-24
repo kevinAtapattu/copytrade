@@ -33,7 +33,7 @@ export default function WalletsPage() {
   const cols: Col<Row>[] = [
     { key: "rank", label: "#", num: true, render: (r) => <span className="muted">{rankOf.get(r.address) ?? ""}</span> },
     { key: "status", label: "Status", sort: (r) => (r.status === "live" ? 0 : r.status === "bench" ? 1 : 2),
-      render: (r) => <span className={`badge ${r.status}`}>{r.status}</span> },
+      render: (r) => <span className={`badge ${r.status}`} title={r.reason}>{r.status === "paused" ? "paused (spam)" : r.status}</span> },
     { key: "wallet", label: "Wallet", render: (r) => (
       <Link href={`/wallets/${r.address}`}><span className="mono">{short(r.address)}</span> {r.label && <span className="muted">{r.label}</span>}</Link>
     ) },
@@ -71,6 +71,7 @@ export default function WalletsPage() {
       <div className="row">
         {r.status === "bench" && <button className="btn small primary" onClick={() => act(() => apiSend(`wallets/${r.address}/status`, "POST", { status: "live" }), "promoted")}>Promote</button>}
         {r.status === "live" && <button className="btn small" onClick={() => act(() => apiSend(`wallets/${r.address}/status`, "POST", { status: "bench" }), "benched")}>Bench</button>}
+        {r.status === "paused" && <button className="btn small" title={r.reason} onClick={() => act(() => apiSend(`wallets/${r.address}/status`, "POST", { status: "bench" }), "resumed")}>Resume</button>}
         {r.status !== "dropped"
           ? <button className="btn small danger" onClick={() => confirm(`Remove ${r.address}?`) && act(() => apiSend(`wallets/${r.address}`, "DELETE"), "removed")}>Remove</button>
           : <button className="btn small" onClick={() => act(() => apiSend(`wallets`, "POST", { address: r.address }), "re-added")}>Re-add</button>}

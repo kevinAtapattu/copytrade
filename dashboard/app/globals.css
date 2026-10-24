@@ -58,6 +58,7 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .badge.live { border-color: var(--good); color: var(--good); }
 .badge.bench { color: var(--text-secondary); }
 .badge.dropped { color: var(--text-muted); }
+.badge.paused { border-color: var(--warning); color: var(--warning); }
 .badge.failed, .badge.critical { border-color: var(--critical); color: var(--critical); }
 .badge.warn { border-color: var(--warning); color: var(--warning); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

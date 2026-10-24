@@ -7,7 +7,7 @@ export type Score = {
   avg_hold_s: number; trades_per_day: number; active_days: number; lucky_trade: boolean; score: number;
 };
 export type Wallet = {
-  address: string; label: string; status: "live" | "bench" | "dropped"; source: string; reason: string;
+  address: string; label: string; status: "live" | "bench" | "paused" | "dropped"; source: string; reason: string;
   added_at: string; status_at: string; last_trade_at?: string;
 };
 // Them vs us: a wallet's own return on each token next to our paper copy's (by delay).

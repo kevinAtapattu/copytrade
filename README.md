@@ -50,7 +50,7 @@ Every service is its own process with its own consumer group, so each can be sca
 
 **Alerts (Discord).** Put a webhook in `DISCORD_WEBHOOK_URL`, then `docker compose up -d alerter`. You get executor closes and safety stops instantly, every closed paper copy in one hourly roll-up (who, token, our $ and %, their %, hold), and a daily summary at 9am. Paper buys, sim fills and bench changes never ping you. Tune with the `ALERT_*` settings in `.env.example`.
 
-**Spending guard.** Ingest meters every PumpPortal message. When `MSG_DAILY_BUDGET` (default 1000/day, at most about 0.001 SOL/day) is hit, all subscriptions pause until midnight UTC. A wallet trading more than `WALLET_MAX_TRADES_PER_HOUR` (default 30) is dropped automatically. The Health page shows both.
+**Spending guard.** Ingest meters every PumpPortal message. When `MSG_DAILY_BUDGET` (default 1000/day, at most about 0.001 SOL/day) is hit, all subscriptions pause until midnight UTC. A wallet trading more than `WALLET_MAX_TRADES_PER_HOUR` (default 30) is paused for `WALLET_SPAM_PAUSE` (default 6h): it stays on the Wallets page but isn't tracked, then resumes on its own. The Health page shows both.
 
 ## What it costs to run (snapshot mode)
 

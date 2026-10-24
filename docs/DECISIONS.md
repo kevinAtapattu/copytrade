@@ -178,3 +178,7 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - No longer instant: paper executor buys, executor rejections, bench drops (spam guard, inactivity), discovery adds, the new-day notice.
 - Roll-ups and the digest are built from the database for a time window, with the last window stored in `settings`, so container restarts neither lose nor repeat them. The first run starts at "now", so turning alerts on never dumps history. Stream events older than 1h (backlog after downtime) are not sent instantly.
 - "Their return" comes from one shared function (`internal/compare`) used by both the dashboard and alerts.
+
+## Spam guard pauses instead of dropping
+- A wallet over `WALLET_MAX_TRADES_PER_HOUR` used to be dropped, which hid it from the Wallets page and lost track of it for good. It is now **paused**: status `paused` with the reason and resume time, still listed (orange "paused (spam)" badge), not subscribed so it costs nothing, and back on the bench after `WALLET_SPAM_PAUSE` (default 6h). The Resume button brings it back sooner. A live wallet that spams resumes to the bench, not live.
+- Ingest only tracks `live` and `bench`; the pause expiry is checked on each wallet reload (every 30s).

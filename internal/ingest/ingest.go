@@ -47,6 +47,8 @@ type Ingestor struct {
 	// Classify, if set, may adjust a tracked trade before it is stored or published
 	// (snapshot mode flags tokens our SOL math cannot price).
 	Classify func(context.Context, model.Trade) model.Trade
+	// Now is the clock for wallet reloads (spam-pause expiry). nil = time.Now.
+	Now func() time.Time
 
 	mu      sync.Mutex
 	tracked map[string]bool
@@ -69,16 +71,21 @@ func New(src source.Source, st store.Store, b bus.Bus, cooldown, maxWatch time.D
 	}
 }
 
-// ReloadWallets diffs the DB wallet list against current subscriptions. Every
-// non-dropped wallet (live + bench) is tracked.
+// ReloadWallets diffs the DB wallet list against current subscriptions. Live and
+// bench wallets are tracked; paused and dropped ones are not. Paused wallets whose
+// pause has run out go back to the bench here.
 func (in *Ingestor) ReloadWallets(ctx context.Context) error {
 	ws, err := in.Store.ListWallets(ctx)
 	if err != nil {
 		return err
 	}
-	want := map[string]bool{}
+	now := time.Now
+	if in.Now != nil {
+		now = in.Now
+	}
+	want := in.resumePaused(ctx, ws, now())
 	for _, w := range ws {
-		if w.Status != model.StatusDropped {
+		if w.Status == model.StatusLive || w.Status == model.StatusBench {
 			want[w.Address] = true
 		}
 	}

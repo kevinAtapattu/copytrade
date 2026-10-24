@@ -35,7 +35,7 @@ func main() {
 			}()
 		}
 	}
-	in.Guard = ingest.Guard{DailyBudget: a.Cfg.MsgDailyBudget, WalletMaxPerHour: a.Cfg.WalletMaxPerHour}
+	in.Guard = ingest.Guard{DailyBudget: a.Cfg.MsgDailyBudget, WalletMaxPerHour: a.Cfg.WalletMaxPerHour, SpamPause: a.Cfg.WalletSpamPause}
 	var snap *snapshot.Snapshotter
 	var rpc *solana.RPC
 	switch a.Cfg.DataMode {

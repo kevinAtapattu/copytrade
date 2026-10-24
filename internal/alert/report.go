@@ -230,8 +230,8 @@ func Digest(ctx context.Context, st store.Store, delay int, now time.Time) (stri
 	var dropped []string
 	if rots, err := st.ListRotations(ctx, 500); err == nil {
 		for _, x := range rots {
-			if x.At.After(since) && x.ToStatus == model.StatusDropped {
-				dropped = append(dropped, r.name(x.Wallet)+" ("+strings.TrimPrefix(x.Reason, "dropped: ")+")")
+			if x.At.After(since) && (x.ToStatus == model.StatusDropped || x.ToStatus == model.StatusPaused) {
+				dropped = append(dropped, r.name(x.Wallet)+" ("+x.Reason+")")
 			}
 		}
 	}
@@ -241,7 +241,7 @@ func Digest(ctx context.Context, st store.Store, delay int, now time.Time) (stri
 	}
 	b.WriteString("\n")
 	if len(dropped) > 0 {
-		fmt.Fprintf(&b, "Dropped: %s\n", strings.Join(dropped, "; "))
+		fmt.Fprintf(&b, "Dropped/paused: %s\n", strings.Join(dropped, "; "))
 	}
 	if n, err := st.CountTokenTradesSince(ctx, since); err == nil {
 		fmt.Fprintf(&b, "PumpPortal: %d messages (~%.5f SOL)", n, float64(n)/10000*0.01)

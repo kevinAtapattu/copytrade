@@ -377,7 +377,7 @@ func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch body.Status {
-	case model.StatusLive, model.StatusBench, model.StatusDropped:
+	case model.StatusLive, model.StatusBench, model.StatusDropped, model.StatusPaused:
 	default:
 		fail(w, 400, fmt.Errorf("bad status %q", body.Status))
 		return

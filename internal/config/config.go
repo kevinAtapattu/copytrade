@@ -30,6 +30,7 @@ type Config struct {
 	TokenMaxWatch      time.Duration
 	WalletReload       time.Duration
 	MsgDailyBudget     int64
+	WalletSpamPause    time.Duration
 	WalletMaxPerHour   int
 
 	// Simulation
@@ -116,6 +117,7 @@ func Load() Config {
 		WalletReload:       dur("WALLET_RELOAD_INTERVAL", 30*time.Second),
 		MsgDailyBudget:     int64(integer("MSG_DAILY_BUDGET", 1000)),
 		WalletMaxPerHour:   integer("WALLET_MAX_TRADES_PER_HOUR", 30),
+		WalletSpamPause:    dur("WALLET_SPAM_PAUSE", 6*time.Hour),
 
 		CopySizeUSD:    flt("COPY_SIZE_USD", 25),
 		PumpFeePct:     flt("PUMP_FEE_PCT", 1.25),

@@ -14,11 +14,12 @@ import (
 //   - DailyBudget: max metered messages per UTC day. When hit, the PumpPortal
 //     connection is closed until midnight UTC, then reopened automatically.
 //   - WalletMaxPerHour: a tracked wallet that trades more than this in a rolling hour is
-//     dropped (status "dropped", reason logged) and unsubscribed. Re-add it from the
-//     dashboard if you still want it.
+//     paused (status "paused", reason shown) and unsubscribed. It stays on the
+//     dashboard and returns to the bench after SpamPause (or via Resume).
 type Guard struct {
 	DailyBudget      int64
 	WalletMaxPerHour int
+	SpamPause        time.Duration
 }
 
 type guardState struct {
@@ -158,12 +159,37 @@ func (in *Ingestor) resumeIfNewDay(ctx context.Context, now time.Time) {
 
 func (in *Ingestor) dropSpammer(ctx context.Context, wallet string, at time.Time) {
 	in.Src.UnsubscribeAccounts([]string{wallet})
-	reason := fmt.Sprintf("dropped: spam guard, over %d trades in 1 hour", in.Guard.WalletMaxPerHour)
-	if _, err := in.Store.SetWalletStatus(ctx, wallet, model.StatusDropped, reason, at); err != nil {
-		slog.Warn("drop spammer", "err", err)
+	reason := fmt.Sprintf("paused: over %d trades in 1 hour (spam guard), resumes %s UTC",
+		in.Guard.WalletMaxPerHour, at.Add(in.Guard.SpamPause).UTC().Format("Jan 2 15:04"))
+	if _, err := in.Store.SetWalletStatus(ctx, wallet, model.StatusPaused, reason, at); err != nil {
+		slog.Warn("pause spammer", "err", err)
 	}
 	slog.Warn("spam guard", "wallet", wallet, "reason", reason)
-	in.emit(ctx, "rotation", wallet+" -> dropped: "+reason)
+	in.emit(ctx, "rotation", wallet+" -> "+reason)
+}
+
+// resumePaused returns spam-paused wallets to the bench once SpamPause has passed.
+// Returns the wallets resumed so the caller can track them again.
+func (in *Ingestor) resumePaused(ctx context.Context, ws []model.Wallet, now time.Time) map[string]bool {
+	out := map[string]bool{}
+	if in.Guard.SpamPause <= 0 {
+		return out
+	}
+	for _, w := range ws {
+		if w.Status != model.StatusPaused || now.Sub(w.StatusAt) < in.Guard.SpamPause {
+			continue
+		}
+		ok, err := in.Store.SetWalletStatus(ctx, w.Address, model.StatusBench, "resumed after spam pause", now)
+		if err != nil {
+			slog.Warn("resume paused wallet", "err", err)
+			continue
+		}
+		if ok {
+			out[w.Address] = true
+			in.emit(ctx, "rotation", w.Address+" -> bench: resumed after spam pause")
+		}
+	}
+	return out
 }
 
 func (in *Ingestor) emit(ctx context.Context, kind, msg string) {
