@@ -260,6 +260,8 @@ type walletRow struct {
 	Open   int                               `json:"open_positions"`
 	// Them vs us over the last 14 days (see buildCompare).
 	Compare compareSummary `json:"compare"`
+	// Their trades seen in the last 24h (activity).
+	Trades24h int `json:"trades_24h"`
 }
 
 func (s *Server) wallets(w http.ResponseWriter, r *http.Request) {
@@ -294,8 +296,12 @@ func (s *Server) wallets(w http.ResponseWriter, r *http.Request) {
 	tts, _ := s.Store.ListTargetTrades(ctx, store.TradeFilter{Since: since})
 	sps, _ := s.Store.ListSimPositions(ctx, store.SimFilter{Since: since})
 	ttBy, psBy := map[string][]model.Trade{}, map[string][]model.SimPosition{}
+	dayAgo := now.Add(-24 * time.Hour)
 	for _, t := range tts {
 		ttBy[t.Trader] = append(ttBy[t.Trader], t)
+		if row := rows[t.Trader]; row != nil && !t.ReceivedAt.Before(dayAgo) {
+			row.Trades24h++
+		}
 	}
 	for _, p := range sps {
 		psBy[p.Wallet] = append(psBy[p.Wallet], p)

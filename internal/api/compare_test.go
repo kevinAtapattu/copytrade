@@ -35,4 +35,8 @@ func TestBuildCompareTheirReturnVsOurs(t *testing.T) {
 		math.Abs(sum.OurAvg["2"]-0.5) > 1e-9 || math.Abs(sum.TheirSame["2"]-1) > 1e-9 {
 		t.Fatalf("bad summary %+v", sum)
 	}
+	// A: bought -10m, sold -2m = 480s; B: -5m to -4m = 60s. Median of [60, 480] picks index 1.
+	if sum.HoldMedianS != 480 || math.Abs(sum.OurPnlUSD["2"]-12.5) > 1e-9 {
+		t.Fatalf("hold %.0f pnl %.2f", sum.HoldMedianS, sum.OurPnlUSD["2"])
+	}
 }

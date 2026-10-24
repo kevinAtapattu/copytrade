@@ -18,7 +18,7 @@ export type CompareRow = {
 };
 export type CompareSummary = {
   tokens: number; their_avg_pct: number; our_avg_pct: Record<string, number>; copied: Record<string, number>;
-  their_same_pct: Record<string, number>;
+  their_same_pct: Record<string, number>; our_pnl_usd: Record<string, number>; hold_median_s: number;
 };
 export type Trade = {
   signature: string; mint: string; trader: string; side: "buy" | "sell"; sol_amount: number; token_amount: number;

@@ -5,10 +5,11 @@ import { Col, Err, Seg, Table } from "@/components/ui";
 import { CompareSummary, Score, Wallet, apiSend, useApi } from "@/lib/api";
 import { ago, dur, num, pct, pnlClass, short, spct, usd } from "@/lib/format";
 
-type Row = Wallet & { scores: Record<string, Record<string, Score>>; open_positions: number; compare?: CompareSummary };
+type Row = Wallet & { scores: Record<string, Record<string, Score>>; open_positions: number; compare?: CompareSummary; trades_24h: number };
 
 export default function WalletsPage() {
   const [delay, setDelay] = useState(2);
+  const [rankBy, setRankBy] = useState<"total" | "best" | "active">("total");
   const [win, setWin] = useState(14);
   const [showDropped, setShowDropped] = useState(false);
   const { data, error, reload } = useApi<Row[]>(`wallets${showDropped ? "?dropped=1" : ""}`);
@@ -20,7 +21,17 @@ export default function WalletsPage() {
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try { await fn(); setMsg(ok); reload(); } catch (e) { setMsg(String((e as Error).message)); }
   };
+  // Ranking: "best" = our avg return per copied token at the selected delay (quality),
+  // "active" = their trades in the last 24h, "total" = our total paper PnL (quality x activity).
+  const rankVal = (r: Row): number => {
+    const d = String(delay), c = r.compare;
+    if (rankBy === "active") return r.trades_24h ?? 0;
+    if (!c?.copied?.[d]) return -1e9; // no copies yet: bottom
+    return rankBy === "best" ? c.our_avg_pct[d] : c.our_pnl_usd[d];
+  };
+  const ranked = (rs: Row[]) => [...rs].sort((a, b) => rankVal(b) - rankVal(a) || (b.trades_24h ?? 0) - (a.trades_24h ?? 0));
   const cols: Col<Row>[] = [
+    { key: "rank", label: "#", num: true, render: (r) => <span className="muted">{rankOf.get(r.address) ?? ""}</span> },
     { key: "status", label: "Status", sort: (r) => (r.status === "live" ? 0 : r.status === "bench" ? 1 : 2),
       render: (r) => <span className={`badge ${r.status}`}>{r.status}</span> },
     { key: "wallet", label: "Wallet", render: (r) => (
@@ -43,9 +54,14 @@ export default function WalletsPage() {
           </span>
         );
       } },
+    { key: "t24", label: "Trades 24h", num: true, sort: (r) => r.trades_24h ?? 0, render: (r) => r.trades_24h ?? 0 },
+    { key: "hold", label: "Their typical hold", num: true, sort: (r) => r.compare?.hold_median_s ?? -1,
+      render: (r) => (r.compare?.hold_median_s ? dur(r.compare.hold_median_s) : <span className="muted">-</span>) },
+    { key: "tot", label: `Our total +${delay}s`, num: true, sort: (r) => r.compare?.our_pnl_usd?.[String(delay)] ?? -1e9,
+      render: (r) => { const v = r.compare?.our_pnl_usd?.[String(delay)]; return v == null ? <span className="muted">-</span> : <span className={pnlClass(v)}>{usd(v, true)}</span>; } },
     { key: "win", label: "Win rate", num: true, sort: (r) => sc(r)?.win_rate ?? 0, render: (r) => pct(sc(r)?.win_rate, 0) },
     { key: "dd", label: "Max DD", num: true, sort: (r) => sc(r)?.max_drawdown ?? 0, render: (r) => pct(sc(r)?.max_drawdown) },
-    { key: "hold", label: "Avg hold", num: true, sort: (r) => sc(r)?.avg_hold_s ?? 0, render: (r) => dur(sc(r)?.avg_hold_s) },
+    { key: "ahold", label: "Our avg hold", num: true, sort: (r) => sc(r)?.avg_hold_s ?? 0, render: (r) => dur(sc(r)?.avg_hold_s) },
     { key: "tpd", label: "Trades/day", num: true, sort: (r) => sc(r)?.trades_per_day ?? 0, render: (r) => num(sc(r)?.trades_per_day, 1) },
     { key: "n", label: "Positions", num: true, sort: (r) => sc(r)?.positions ?? 0, render: (r) => sc(r)?.positions ?? 0 },
     { key: "days", label: "History", num: true, sort: (r) => sc(r)?.active_days ?? 0, render: (r) => `${num(sc(r)?.active_days, 1)}d` },
@@ -61,8 +77,10 @@ export default function WalletsPage() {
       </div>
     ) },
   ];
-  const live = (data ?? []).filter((r) => r.status === "live");
-  const rest = (data ?? []).filter((r) => r.status !== "live");
+  const live = ranked((data ?? []).filter((r) => r.status === "live"));
+  const rest = ranked((data ?? []).filter((r) => r.status !== "live"));
+  const rankOf = new Map<string, number>();
+  [live, rest].forEach((list) => list.forEach((r, i) => rankOf.set(r.address, i + 1)));
   return (
     <>
       <div className="page-head">
@@ -71,6 +89,9 @@ export default function WalletsPage() {
           <div className="sub">Copyability = what we would have made copying them, at the selected delay. Click a column to sort.</div>
         </div>
         <div className="row">
+          <span className="sub">Rank by</span>
+          <Seg value={rankBy} onChange={setRankBy} options={[
+            { v: "total", label: "Best for us (total)" }, { v: "best", label: "Best per trade" }, { v: "active", label: "Most active" }]} />
           <Seg value={delay} onChange={setDelay} options={[2, 10, 60].map((d) => ({ v: d, label: `+${d}s` }))} />
           <Seg value={win} onChange={setWin} options={[{ v: 14, label: "14d" }, { v: 30, label: "30d" }]} />
           <label className="sub"><input type="checkbox" checked={showDropped} onChange={(e) => setShowDropped(e.target.checked)} /> show dropped</label>
@@ -91,11 +112,11 @@ export default function WalletsPage() {
       </div>
       <div className="card" style={{ marginBottom: 14 }}>
         <h3>Live ({live.length})</h3>
-        <Table rows={live} cols={cols} rowKey={(r) => r.address} initialSort={{ key: "score", desc: true }} empty="No live wallets yet. Bench wallets get promoted after 14+ days positive." />
+        <Table rows={live} cols={cols} rowKey={(r) => r.address} empty="No live wallets yet. Bench wallets get promoted after 14+ days positive." />
       </div>
       <div className="card">
         <h3>Bench ({rest.length})</h3>
-        <Table rows={rest} cols={cols} rowKey={(r) => r.address} initialSort={{ key: "score", desc: true }} empty="No wallets. Add some above or put them in wallets.txt." />
+        <Table rows={rest} cols={cols} rowKey={(r) => r.address} empty="No wallets. Add some above or put them in wallets.txt." />
       </div>
     </>
   );

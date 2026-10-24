@@ -40,6 +40,9 @@ type compareSummary struct {
 	// TheirSame is their average over exactly the tokens we copied at that delay,
 	// so TheirSame[d] vs OurAvg[d] is the cost of copying (delay + fees + slippage).
 	TheirSame map[string]float64 `json:"their_same_pct"`
+	OurPnlUSD map[string]float64 `json:"our_pnl_usd"` // total paper PnL of our copies, by delay
+	// HoldMedianS is their median buy-to-last-sell time on tokens they fully exited.
+	HoldMedianS float64 `json:"hold_median_s"`
 }
 
 // buildCompare pairs a wallet's own trades with our simulated positions per token.
@@ -118,14 +121,19 @@ func buildCompare(trades []model.Trade, ps []model.SimPosition, toks func(string
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].FirstBuyAt.After(rows[j].FirstBuyAt) })
 
-	sum := compareSummary{OurAvg: map[string]float64{}, Copied: map[string]int{}, TheirSame: map[string]float64{}}
+	sum := compareSummary{OurAvg: map[string]float64{}, Copied: map[string]int{}, TheirSame: map[string]float64{}, OurPnlUSD: map[string]float64{}}
+	var holds []float64
 	for _, r := range rows {
 		sum.Tokens++
+		if !r.TheirOpen && r.LastAt.After(r.FirstBuyAt) {
+			holds = append(holds, r.LastAt.Sub(r.FirstBuyAt).Seconds())
+		}
 		sum.TheirAvg += r.TheirPct
 		for _, d := range model.Delays {
 			k := strconv.Itoa(d)
 			if c := r.Ours[k]; c != nil {
 				sum.OurAvg[k] += c.PnlPct
+				sum.OurPnlUSD[k] += c.PnlUSD
 				sum.TheirSame[k] += r.TheirPct
 				sum.Copied[k]++
 			}
@@ -133,6 +141,10 @@ func buildCompare(trades []model.Trade, ps []model.SimPosition, toks func(string
 	}
 	if sum.Tokens > 0 {
 		sum.TheirAvg /= float64(sum.Tokens)
+	}
+	if len(holds) > 0 {
+		sort.Float64s(holds)
+		sum.HoldMedianS = holds[len(holds)/2]
 	}
 	for k, n := range sum.Copied {
 		if n > 0 {
