@@ -13,13 +13,12 @@ import (
 // Guard caps what the metered stream can cost.
 //   - DailyBudget: max metered messages per UTC day. When hit, the PumpPortal
 //     connection is closed until midnight UTC, then reopened automatically.
-//   - WalletMaxPerHour: a tracked wallet that trades more than this in a rolling hour is
+//   - WalletMaxPerDay: a tracked wallet that trades more than this in one UTC day is
 //     paused (status "paused", reason shown) and unsubscribed. It stays on the
-//     dashboard and returns to the bench after SpamPause (or via Resume).
+//     dashboard and returns to the bench at the next UTC midnight (or via Resume).
 type Guard struct {
-	DailyBudget      int64
-	WalletMaxPerHour int
-	SpamPause        time.Duration
+	DailyBudget     int64
+	WalletMaxPerDay int
 }
 
 type guardState struct {
@@ -27,7 +26,7 @@ type guardState struct {
 	today     int64     // metered messages received today
 	paused    bool
 	warned    bool
-	walletHit map[string][]time.Time
+	walletDay map[string]int // trades per tracked wallet this UTC day
 }
 
 // GuardStats is reported on the health page.
@@ -36,7 +35,7 @@ type GuardStats struct {
 	DailyBudget   int64     `json:"daily_budget"`
 	Paused        bool      `json:"paused"`
 	ResumesAt     time.Time `json:"resumes_at,omitempty"`
-	WalletMaxHour int       `json:"wallet_max_per_hour"`
+	WalletMaxDay  int       `json:"wallet_max_per_day"`
 }
 
 func utcDay(t time.Time) time.Time { return t.UTC().Truncate(24 * time.Hour) }
@@ -68,7 +67,7 @@ func (in *Ingestor) GuardStats() GuardStats {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	s := GuardStats{MessagesToday: in.g.today, DailyBudget: in.Guard.DailyBudget, Paused: in.g.paused,
-		WalletMaxHour: in.Guard.WalletMaxPerHour}
+		WalletMaxDay: in.Guard.WalletMaxPerDay}
 	if in.g.paused {
 		s.ResumesAt = in.g.day.Add(24 * time.Hour)
 	}
@@ -81,6 +80,7 @@ func (in *Ingestor) GuardStats() GuardStats {
 func (in *Ingestor) countMessage(t model.Trade) (pause, warn, spam bool) {
 	if d := utcDay(t.ReceivedAt); d.After(in.g.day) {
 		in.g.day, in.g.today, in.g.warned = d, 0, false
+		in.g.walletDay = nil
 	}
 	in.g.today++
 	if b := in.Guard.DailyBudget; b > 0 && !in.g.paused {
@@ -90,22 +90,14 @@ func (in *Ingestor) countMessage(t model.Trade) (pause, warn, spam bool) {
 			in.g.warned, warn = true, true
 		}
 	}
-	if max := in.Guard.WalletMaxPerHour; max > 0 && in.tracked[t.Trader] {
-		if in.g.walletHit == nil {
-			in.g.walletHit = map[string][]time.Time{}
+	if max := in.Guard.WalletMaxPerDay; max > 0 && in.tracked[t.Trader] {
+		if in.g.walletDay == nil {
+			in.g.walletDay = map[string]int{}
 		}
-		cut := t.ReceivedAt.Add(-time.Hour)
-		hits := in.g.walletHit[t.Trader]
-		i := 0
-		for i < len(hits) && hits[i].Before(cut) {
-			i++
-		}
-		hits = append(hits[i:], t.ReceivedAt)
-		in.g.walletHit[t.Trader] = hits
-		if len(hits) > max {
+		in.g.walletDay[t.Trader]++
+		if in.g.walletDay[t.Trader] > max {
 			spam = true
 			delete(in.tracked, t.Trader)
-			delete(in.g.walletHit, t.Trader)
 		}
 	}
 	return
@@ -159,8 +151,8 @@ func (in *Ingestor) resumeIfNewDay(ctx context.Context, now time.Time) {
 
 func (in *Ingestor) dropSpammer(ctx context.Context, wallet string, at time.Time) {
 	in.Src.UnsubscribeAccounts([]string{wallet})
-	reason := fmt.Sprintf("paused: over %d trades in 1 hour (spam guard), resumes %s UTC",
-		in.Guard.WalletMaxPerHour, at.Add(in.Guard.SpamPause).UTC().Format("Jan 2 15:04"))
+	reason := fmt.Sprintf("paused: over %d trades today (daily limit), resumes %s UTC",
+		in.Guard.WalletMaxPerDay, utcDay(at).Add(24*time.Hour).Format("Jan 2 15:04"))
 	if _, err := in.Store.SetWalletStatus(ctx, wallet, model.StatusPaused, reason, at); err != nil {
 		slog.Warn("pause spammer", "err", err)
 	}
@@ -168,25 +160,22 @@ func (in *Ingestor) dropSpammer(ctx context.Context, wallet string, at time.Time
 	in.emit(ctx, "rotation", wallet+" -> "+reason)
 }
 
-// resumePaused returns spam-paused wallets to the bench once SpamPause has passed.
-// Returns the wallets resumed so the caller can track them again.
+// resumePaused returns wallets paused by the daily limit to the bench once a new
+// UTC day starts. Returns the wallets resumed so the caller can track them again.
 func (in *Ingestor) resumePaused(ctx context.Context, ws []model.Wallet, now time.Time) map[string]bool {
 	out := map[string]bool{}
-	if in.Guard.SpamPause <= 0 {
-		return out
-	}
 	for _, w := range ws {
-		if w.Status != model.StatusPaused || now.Sub(w.StatusAt) < in.Guard.SpamPause {
+		if w.Status != model.StatusPaused || !utcDay(now).After(utcDay(w.StatusAt)) {
 			continue
 		}
-		ok, err := in.Store.SetWalletStatus(ctx, w.Address, model.StatusBench, "resumed after spam pause", now)
+		ok, err := in.Store.SetWalletStatus(ctx, w.Address, model.StatusBench, "resumed: new day", now)
 		if err != nil {
 			slog.Warn("resume paused wallet", "err", err)
 			continue
 		}
 		if ok {
 			out[w.Address] = true
-			in.emit(ctx, "rotation", w.Address+" -> bench: resumed after spam pause")
+			in.emit(ctx, "rotation", w.Address+" -> bench: resumed for the new day")
 		}
 	}
 	return out

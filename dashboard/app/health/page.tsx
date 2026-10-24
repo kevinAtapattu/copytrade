@@ -15,7 +15,7 @@ const EXPECTED = ["ingest", "simulator", "scorer", "discovery", "api", "executor
 export default function HealthPage() {
   const { data, error } = useApi<Health>("health", 5000);
   const ing = data?.services?.ingest?.data as Record<string, unknown> | undefined;
-  const guard = ing?.guard as { messages_today: number; daily_budget: number; paused: boolean; resumes_at?: string; wallet_max_per_hour: number } | undefined;
+  const guard = ing?.guard as { messages_today: number; daily_budget: number; paused: boolean; resumes_at?: string; wallet_max_per_day: number } | undefined;
   const snap = ing?.snapshot as { watched_tokens: number; pending_reads: number; curve_reads: number; read_errors: number; last_error?: string } | undefined;
   const rpcToday = ing?.rpc_calls_today as number | undefined;
   const rpcMax = ing?.rpc_daily_max as number | undefined;
@@ -50,8 +50,8 @@ export default function HealthPage() {
         <Stat label={helius ? "Wallet trades today" : "Message budget today"}
           value={helius ? num(data?.messages_today, 0) : guard ? (guard.paused ? "PAUSED" : `${num(guard.messages_today, 0)} / ${num(guard.daily_budget, 0)}`) : "-"}
           tone={guard?.paused ? -1 : undefined}
-          hint={helius ? `no message budget needed (free) · wallets over ${guard?.wallet_max_per_hour ?? 30} trades/h get paused` :
-            guard ? (guard.paused ? `budget hit, resumes ${new Date(guard.resumes_at!).toLocaleString()}` : `max ~${num(guard.daily_budget / 10000 * 0.01, 4)} SOL/day · wallets over ${guard.wallet_max_per_hour} trades/h get paused`) : ""} />
+          hint={helius ? `no message budget needed (free) · wallets over ${guard?.wallet_max_per_day ?? 1000} trades/day get paused until the next day` :
+            guard ? (guard.paused ? `budget hit, resumes ${new Date(guard.resumes_at!).toLocaleString()}` : `max ~${num(guard.daily_budget / 10000 * 0.01, 4)} SOL/day · wallets over ${guard.wallet_max_per_day} trades/day get paused`) : ""} />
         <Stat label="RPC calls today (prices)" value={rpcToday != null ? `${num(rpcToday, 0)} / ${num(rpcMax, 0)}` : "-"}
           hint={snap ? `${snap.watched_tokens} tokens priced every mark · ${snap.read_errors} read errors${snap.last_error ? `: ${snap.last_error}` : ""}` : ""} />
       </div>

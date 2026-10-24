@@ -119,8 +119,8 @@ func TestHeliusStreamsWalletTrades(t *testing.T) {
 	}
 	buy := history.Event{Mint: hMint, User: hWallet, IsBuy: true, SolAmount: 1.5, TokenAmount: 40e6, VSol: 40, VTokens: 800e6}
 	sell := history.Event{Mint: hMint, User: hWallet, SolAmount: 1.2, TokenAmount: 30e6, VSol: 39, VTokens: 820e6}
-	send("FAILED", map[string]any{"InstructionError": []any{0, "x"}}, pumpLogs(buy)) // failed tx: ignored
-	send("SPAM", nil, []string{"Program 11111111111111111111111111111111 invoke [1]"})  // not pump: ignored
+	send("FAILED", map[string]any{"InstructionError": []any{0, "x"}}, pumpLogs(buy))   // failed tx: ignored
+	send("SPAM", nil, []string{"Program 11111111111111111111111111111111 invoke [1]"}) // not pump: ignored
 	send("BUY", nil, pumpLogs(buy))
 	send("SELL", nil, pumpLogs(sell))
 	b, s := <-got, <-got

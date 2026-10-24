@@ -8,8 +8,8 @@ const (
 	StatusLive    = "live"
 	StatusBench   = "bench"
 	StatusDropped = "dropped"
-	// StatusPaused: temporarily not tracked (spam guard). Stays visible and
-	// returns to bench automatically after Guard.SpamPause.
+	// StatusPaused: temporarily not tracked (over the daily trade limit). Stays
+	// visible and returns to bench automatically at the next UTC midnight.
 	StatusPaused = "paused"
 )
 

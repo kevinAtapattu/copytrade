@@ -55,7 +55,7 @@ func Run(ctx context.Context, c config.Config, st store.Store, src *source.Repla
 	px := price.Fixed(opt.SolUSD)
 
 	in := ingest.New(src, st, b, c.TokenUnsubCooldown, c.TokenMaxWatch)
-	in.Guard = ingest.Guard{DailyBudget: c.MsgDailyBudget, WalletMaxPerHour: c.WalletMaxPerHour}
+	in.Guard = ingest.Guard{DailyBudget: c.MsgDailyBudget, WalletMaxPerDay: c.WalletMaxPerDay}
 	var snap *snapshot.Snapshotter
 	var hist jobs.History
 	if opt.Mode == "snapshot" {

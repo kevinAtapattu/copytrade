@@ -190,3 +190,6 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - PumpPortal keeps its single connection for the free migration (graduation) stream only, so it bills nothing; the message budget is disabled in this mode and the Health page shows Helius usage instead. `WALLET_SOURCE=pumpportal` restores the old behavior.
 - **Decoder bug fixed alongside:** trading terminals emit their own Anchor `TradeEvent` with the same discriminator as pump's. Events are now accepted only from the pump program's log frame or its own emit_cpi inner instructions; before, the terminal's event decoded as a zero-SOL trade.
 - Data before this change only contains GMGN-routed trades, so early scores and rankings were biased toward those wallets.
+
+## Per-wallet limit is daily, not hourly
+- The hourly limit (30 trades/hour) paused active traders during normal bursts (theo did 30 in his first hour). With wallet trades now free via Helius, the only cost per trade is one balance lookup, so the guard is a daily safety net instead: `WALLET_MAX_TRADES_PER_DAY` (default 1000). Over it, the wallet is paused until the next UTC midnight (8pm Eastern), stays visible, and resumes on its own.

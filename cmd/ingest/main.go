@@ -49,7 +49,7 @@ func main() {
 			}()
 		}
 	}
-	in.Guard = ingest.Guard{DailyBudget: a.Cfg.MsgDailyBudget, WalletMaxPerHour: a.Cfg.WalletMaxPerHour, SpamPause: a.Cfg.WalletSpamPause}
+	in.Guard = ingest.Guard{DailyBudget: a.Cfg.MsgDailyBudget, WalletMaxPerDay: a.Cfg.WalletMaxPerDay}
 	if helius {
 		// Helius bills by data volume (capped by HELIUS_WS_DAILY_MB), not per message,
 		// and PumpPortal carries no paid streams, so the message budget is off.

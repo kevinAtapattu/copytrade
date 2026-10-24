@@ -200,19 +200,21 @@ func TestInitBudgetFromDB(t *testing.T) {
 func TestSpamGuardPausesWalletThenResumes(t *testing.T) {
 	in, src, st, _ := setup(t)
 	ctx := context.Background()
-	in.Guard = Guard{WalletMaxPerHour: 3, SpamPause: 6 * time.Hour}
+	in.Guard = Guard{WalletMaxPerDay: 3}
 	for i := 0; i < 3; i++ {
 		in.HandleTrade(ctx, tr(string(rune('a'+i)), "W1", "buy", 100, time.Duration(i)*10*time.Minute))
 	}
-	// 3 in the hour is fine; the 4th, an hour after the first, is too (window slides)
-	in.HandleTrade(ctx, tr("d", "W1", "buy", 100, 61*time.Minute))
-	if w, _, _ := st.GetWallet(ctx, "W1"); w.Status == model.StatusPaused {
-		t.Fatal("paused though only 3 trades in any hour")
+	// 3 today is fine; the count starts over on the next UTC day
+	for i := 0; i < 3; i++ {
+		in.HandleTrade(ctx, tr(string(rune('d'+i)), "W1", "buy", 100, 25*time.Hour+time.Duration(i)*time.Minute))
 	}
-	in.HandleTrade(ctx, tr("e", "W1", "buy", 100, 62*time.Minute))
+	if w, _, _ := st.GetWallet(ctx, "W1"); w.Status == model.StatusPaused {
+		t.Fatal("paused though only 3 trades in each day")
+	}
+	in.HandleTrade(ctx, tr("z", "W1", "buy", 100, 26*time.Hour))
 	w, _, _ := st.GetWallet(ctx, "W1")
 	if w.Status != model.StatusPaused || len(src.unsubA) != 1 || src.unsubA[0][0] != "W1" {
-		t.Fatalf("spammer not paused: status %s unsub %v", w.Status, src.unsubA)
+		t.Fatalf("over-limit wallet not paused: status %s unsub %v", w.Status, src.unsubA)
 	}
 	resubscribed := func() bool {
 		for _, sub := range src.subA[1:] {
@@ -224,14 +226,14 @@ func TestSpamGuardPausesWalletThenResumes(t *testing.T) {
 		}
 		return false
 	}
-	// Still within the pause: a reload keeps it untracked.
+	// Later the same day: a reload keeps it untracked.
 	in.Now = func() time.Time { return w.StatusAt.Add(time.Hour) }
 	in.ReloadWallets(ctx)
 	if resubscribed() {
 		t.Fatal("paused spammer was resubscribed")
 	}
 	// After the pause it is back on the bench and tracked again.
-	in.Now = func() time.Time { return w.StatusAt.Add(6*time.Hour + time.Minute) }
+	in.Now = func() time.Time { return w.StatusAt.UTC().Truncate(24 * time.Hour).Add(24*time.Hour + time.Minute) }
 	in.ReloadWallets(ctx)
 	if w, _, _ := st.GetWallet(ctx, "W1"); w.Status != model.StatusBench {
 		t.Fatalf("status after resume %s", w.Status)
