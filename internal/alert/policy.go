@@ -126,37 +126,72 @@ type CopyLine struct {
 // MaxMsg keeps messages under Discord's 2000-character limit with room to spare.
 const MaxMsg = 1900
 
-// Rollup formats closed copies, biggest |PnL| first, always within MaxMsg.
-func Rollup(title string, lines []CopyLine, suppressed int) string {
+// Rollup is the periodic high-level summary: net result, win rate, and the best
+// and worst copy for the period, plus today's running totals and the best and
+// worst wallet so far. lines are the period's closed copies, day is today's.
+// Returns "" when nothing closed in the period (and nothing was held back).
+func Rollup(label string, lines, day []CopyLine, suppressed int) string {
 	if len(lines) == 0 && suppressed == 0 {
 		return ""
 	}
-	sort.SliceStable(lines, func(i, j int) bool { return math.Abs(lines[i].PnlUSD) > math.Abs(lines[j].PnlUSD) })
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %s\n", label, totals(lines))
+	if len(lines) > 0 {
+		best, worst := lines[0], lines[0]
+		for _, l := range lines {
+			if l.PnlUSD > best.PnlUSD {
+				best = l
+			}
+			if l.PnlUSD < worst.PnlUSD {
+				worst = l
+			}
+		}
+		fmt.Fprintf(&b, "Best: %s %s (%s)", best.Wallet, USD(best.PnlUSD), Pct(best.PnlPct))
+		if len(lines) > 1 {
+			fmt.Fprintf(&b, " · Worst: %s %s (%s)", worst.Wallet, USD(worst.PnlUSD), Pct(worst.PnlPct))
+		}
+		b.WriteString("\n")
+	}
+	if len(day) > 0 {
+		fmt.Fprintf(&b, "Today so far: %s\n", totals(day))
+		by := map[string]float64{}
+		for _, l := range day {
+			by[l.Wallet] += l.PnlUSD
+		}
+		var names []string
+		for w := range by {
+			names = append(names, w)
+		}
+		sort.Slice(names, func(i, j int) bool {
+			return by[names[i]] > by[names[j]] || (by[names[i]] == by[names[j]] && names[i] < names[j])
+		})
+		fmt.Fprintf(&b, "Top wallet today: %s %s", names[0], USD(by[names[0]]))
+		if len(names) > 1 {
+			last := names[len(names)-1]
+			fmt.Fprintf(&b, " · Bottom: %s %s", last, USD(by[last]))
+		}
+		b.WriteString("\n")
+	}
+	if suppressed > 0 {
+		fmt.Fprintf(&b, "(%d other alerts held back by the hourly cap)\n", suppressed)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// totals is "+$8.40 net · 12 closed · 7 won (58%)".
+func totals(ls []CopyLine) string {
 	var net float64
 	wins := 0
-	for _, l := range lines {
+	for _, l := range ls {
 		net += l.PnlUSD
 		if l.PnlUSD > 0 {
 			wins++
 		}
 	}
-	total := fmt.Sprintf("Total: %d copies, %s net, %d won", len(lines), USD(net), wins)
-	if suppressed > 0 {
-		total += fmt.Sprintf(" · %d other alerts held back by the hourly cap", suppressed)
+	if len(ls) == 0 {
+		return "nothing closed"
 	}
-	var b strings.Builder
-	b.WriteString(title + "\n")
-	for i, l := range lines {
-		row := "• " + FormatCopy(l) + "\n"
-		more := fmt.Sprintf("…and %d more\n", len(lines)-i)
-		if b.Len()+len(row)+len(more)+len(total) > MaxMsg {
-			b.WriteString(more)
-			break
-		}
-		b.WriteString(row)
-	}
-	b.WriteString(total)
-	return b.String()
+	return fmt.Sprintf("%s net · %d closed · %d won (%.0f%%)", USD(net), len(ls), wins, float64(wins)/float64(len(ls))*100)
 }
 
 // FormatCopy renders one closed copy: who, what, our result vs theirs, hold.

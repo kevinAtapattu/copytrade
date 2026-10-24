@@ -193,3 +193,6 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 
 ## Per-wallet limit is daily, not hourly
 - The hourly limit (30 trades/hour) paused active traders during normal bursts (theo did 30 in his first hour). With wallet trades now free via Helius, the only cost per trade is one balance lookup, so the guard is a daily safety net instead: `WALLET_MAX_TRADES_PER_DAY` (default 1000). Over it, the wallet is paused until the next UTC midnight (8pm Eastern), stays visible, and resumes on its own.
+
+## Hourly alert is a net summary, not a trade list
+- The roll-up listed every closed copy. Kevin wants the high-level picture instead, so it is now a few lines: the period's net, closed count and win rate, the best and worst copy (wallet, $ and %), today's running total since local midnight (`ALERT_TZ`), and the top and bottom wallet today. It stays short no matter how many copies closed. Per-trade detail lives on the dashboard.

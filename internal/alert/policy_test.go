@@ -66,26 +66,33 @@ func TestLimiterDedupesAndCaps(t *testing.T) {
 	}
 }
 
-func TestRollupFitsDiscordAndSorts(t *testing.T) {
-	var lines []CopyLine
-	for i := 0; i < 60; i++ {
-		lines = append(lines, CopyLine{Wallet: "Alpha-wallet-4", Mint: "AbCd..pump", PnlUSD: float64(i%7) - 3, PnlPct: 0.1,
-			TheirPct: 0.5, HoldS: 200})
+func TestRollupSummary(t *testing.T) {
+	hour := []CopyLine{
+		{Wallet: "Johnson", PnlUSD: 9.10, PnlPct: 0.36},
+		{Wallet: "dash", PnlUSD: -6.20, PnlPct: -0.25},
+		{Wallet: "bust", PnlUSD: 5.50, PnlPct: 0.22},
 	}
-	lines = append(lines, CopyLine{Wallet: "Johnson", Mint: "BIG1..pump", PnlUSD: 40, PnlPct: 1.6, TheirPct: math.NaN(), HoldS: 4000})
-	s := Rollup("Paper copies closed since 1:00pm (+2s):", lines, 2)
-	if len(s) > MaxMsg {
-		t.Fatalf("roll-up is %d chars", len(s))
+	day := append([]CopyLine{{Wallet: "dash", PnlUSD: -3.60}, {Wallet: "Johnson", PnlUSD: 6.10}}, hour...)
+	s := Rollup("Paper copies (+2s), last hour", hour, day, 0)
+	want := "Paper copies (+2s), last hour: +$8.40 net · 3 closed · 2 won (67%)\n" +
+		"Best: Johnson +$9.10 (+36%) · Worst: dash -$6.20 (-25%)\n" +
+		"Today so far: +$10.90 net · 5 closed · 3 won (60%)\n" +
+		"Top wallet today: Johnson +$15.20 · Bottom: dash -$9.80"
+	if s != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", s, want)
 	}
-	rows := strings.Split(s, "\n")
-	if !strings.HasPrefix(rows[1], "• Johnson · BIG1..pump: +$40.00 (+160%) · held 67m") || strings.Contains(rows[1], "they") {
-		t.Fatalf("biggest first, no 'they' when unknown: %q", rows[1])
+	if Rollup("x", nil, day, 0) != "" {
+		t.Fatal("nothing closed this period should send nothing")
 	}
-	last := rows[len(rows)-1]
-	if !strings.HasPrefix(last, "Total: 61 copies") || !strings.Contains(last, "2 other alerts held back") || !strings.Contains(s, "more") {
-		t.Fatalf("bad total/overflow: %q", last)
+	if s := Rollup("x", nil, nil, 3); !strings.Contains(s, "3 other alerts held back") {
+		t.Fatalf("held-back count missing: %q", s)
 	}
-	if Rollup("x", nil, 0) != "" {
-		t.Fatal("nothing to report should send nothing")
+	// Many copies still produce a short message.
+	var many []CopyLine
+	for i := 0; i < 500; i++ {
+		many = append(many, CopyLine{Wallet: "w", PnlUSD: 1, TheirPct: math.NaN()})
+	}
+	if s := Rollup("x", many, many, 0); len(s) > 400 {
+		t.Fatalf("summary too long: %d chars", len(s))
 	}
 }

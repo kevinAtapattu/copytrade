@@ -87,7 +87,7 @@ func main() {
 	}()
 
 	policy := fmt.Sprintf("copytrade alerts on. Instant: executor closes, real-money trades, live promotions/demotions, spending and safety stops, errors (max %d/hour). "+
-		"Paper copies at +%ds: one roll-up every %s. Daily summary at %d:00 %s.", c.AlertMaxPerHour, c.AlertSimDelay, c.AlertRollupEvery, c.AlertDigestHour, c.AlertTZ)
+		"Paper copies at +%ds: a net summary every %s. Daily summary at %d:00 %s.", c.AlertMaxPerHour, c.AlertSimDelay, c.AlertRollupEvery, c.AlertDigestHour, c.AlertTZ)
 	if c.AlertRollupEvery <= 0 {
 		policy += " (roll-ups off)"
 	}
@@ -112,12 +112,19 @@ func main() {
 				slog.Warn("roll-up", "err", err)
 				return
 			}
+			local := now.In(loc)
+			midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+			day, err := alert.CopyLines(a.Ctx, a.Store, c.AlertSimDelay, midnight, now)
+			if err != nil {
+				slog.Warn("roll-up (today)", "err", err)
+				return
+			}
 			mu.Lock()
 			sup := lim.Suppressed
 			lim.Suppressed = 0
 			mu.Unlock()
-			title := fmt.Sprintf("Paper copies closed since %s (+%ds):", last.In(loc).Format("3:04pm"), c.AlertSimDelay)
-			send(alert.Rollup(title, lines, sup)) // "" when nothing happened: no message
+			label := fmt.Sprintf("Paper copies (+%ds), last %s", c.AlertSimDelay, window(now.Sub(last)))
+			send(alert.Rollup(label, lines, day, sup)) // "" when nothing closed: no message
 			setSetting(a.Ctx, a, keyRollupLast, now.Format(time.RFC3339Nano))
 		})
 	}
@@ -172,6 +179,18 @@ func main() {
 	})
 	if err != nil && a.Ctx.Err() == nil {
 		slog.Error("subscribe", "err", err)
+	}
+}
+
+// window names a roll-up period: "hour", "4 hours", "30 min".
+func window(d time.Duration) string {
+	switch h := d.Round(time.Hour).Hours(); {
+	case d < 50*time.Minute:
+		return fmt.Sprintf("%.0f min", d.Minutes())
+	case h <= 1:
+		return "hour"
+	default:
+		return fmt.Sprintf("%.0f hours", h)
 	}
 }
 
