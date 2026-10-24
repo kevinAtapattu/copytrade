@@ -77,18 +77,20 @@ func EncodeEvent(e Event) []byte {
 	return b
 }
 
-// EventsFromTx finds TradeEvents in program logs ("Program data: <base64>") and in
-// inner instructions (Anchor emit_cpi: 8-byte event tag + discriminator + body).
+// EventsFromTx finds pump.fun TradeEvents in program logs ("Program data: <base64>")
+// and in inner instructions (Anchor emit_cpi: 8-byte event tag + discriminator + body).
+// Only data emitted by the pump program counts: trading terminals define their own
+// "TradeEvent" with the same Anchor discriminator, and decoding theirs as pump's
+// yields junk (zero SOL, zero reserves).
 func EventsFromTx(tx solana.TxEvents) []Event {
 	var blobs [][]byte
-	for _, l := range tx.Logs {
-		if rest, ok := strings.CutPrefix(l, "Program data: "); ok {
-			if b, err := base64.StdEncoding.DecodeString(rest); err == nil {
-				blobs = append(blobs, b)
-			}
+	blobs = append(blobs, PumpLogData(tx.Logs)...)
+	scoped := len(tx.InnerPrograms) == len(tx.InnerData)
+	for i, b := range tx.InnerData {
+		if !scoped || tx.InnerPrograms[i] == curve.PumpProgram {
+			blobs = append(blobs, b)
 		}
 	}
-	blobs = append(blobs, tx.InnerData...)
 	var out []Event
 	seen := map[string]bool{}
 	for _, b := range blobs {
@@ -104,6 +106,38 @@ func EventsFromTx(tx solana.TxEvents) []Event {
 			if !seen[k] { // the same event can appear in both logs and inner instructions
 				seen[k] = true
 				out = append(out, ev)
+			}
+		}
+	}
+	return out
+}
+
+// PumpLogData returns the decoded "Program data:" payloads emitted while the pump
+// program was the executing frame. Logs without invoke lines (fixtures) are unscoped.
+func PumpLogData(logs []string) [][]byte {
+	framed := false
+	for _, l := range logs {
+		if strings.HasPrefix(l, "Program ") && strings.Contains(l, " invoke [") {
+			framed = true
+			break
+		}
+	}
+	var stack []string
+	var out [][]byte
+	for _, l := range logs {
+		switch {
+		case strings.HasPrefix(l, "Program data: "):
+			if framed && (len(stack) == 0 || stack[len(stack)-1] != curve.PumpProgram) {
+				continue
+			}
+			if b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(l, "Program data: ")); err == nil {
+				out = append(out, b)
+			}
+		case strings.HasPrefix(l, "Program ") && strings.Contains(l, " invoke ["):
+			stack = append(stack, strings.Fields(l)[1])
+		case strings.HasPrefix(l, "Program ") && (strings.HasSuffix(l, " success") || strings.Contains(l, " failed")):
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
 			}
 		}
 	}

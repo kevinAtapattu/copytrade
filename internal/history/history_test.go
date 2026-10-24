@@ -11,6 +11,7 @@ import (
 
 	"github.com/mr-tron/base58"
 
+	"copytrade/internal/curve"
 	"copytrade/internal/model"
 	"copytrade/internal/solana"
 )
@@ -134,5 +135,28 @@ func TestFetcherSkipsMigratedTokenWhenLaunchUnreachable(t *testing.T) {
 	trades, err := f.TokenTrades(context.Background(), model.Token{Mint: mint, CurveKey: "CURVE", Migrated: true})
 	if err != nil || len(trades) != 0 || txCalls != 0 {
 		t.Fatalf("want skip with no tx calls, got %d trades, %d calls, err %v", len(trades), txCalls, err)
+	}
+}
+
+func TestEventsOnlyFromPumpProgram(t *testing.T) {
+	const router = "term9YPb9mzAsABaqN71A4xdbxHmpBNZavpBiQKZzN3"
+	real := EncodeEvent(ev(true, 1.25, 300))
+	junk := EncodeEvent(Event{Mint: mint, User: user, IsBuy: true, Timestamp: 300}) // a router's own "TradeEvent": same discriminator, zero amounts
+	b64 := base64.StdEncoding.EncodeToString
+	tx := solana.TxEvents{
+		Logs: []string{
+			"Program " + router + " invoke [1]",
+			"Program " + curve.PumpProgram + " invoke [2]",
+			"Program data: " + b64(real),
+			"Program " + curve.PumpProgram + " success",
+			"Program data: " + b64(junk), // emitted by the router frame
+			"Program " + router + " success",
+		},
+		InnerData:     [][]byte{junk, append([]byte{0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d}, real...)},
+		InnerPrograms: []string{router, curve.PumpProgram},
+	}
+	evs := EventsFromTx(tx)
+	if len(evs) != 1 || evs[0].SolAmount != 1.25 {
+		t.Fatalf("want only the pump event, got %+v", evs)
 	}
 }

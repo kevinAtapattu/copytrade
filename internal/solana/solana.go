@@ -301,7 +301,9 @@ type TxEvents struct {
 	BlockTime time.Time
 	Logs      []string
 	InnerData [][]byte
-	Failed    bool
+	// InnerPrograms[i] is the program that ran InnerData[i] (same length when known).
+	InnerPrograms []string
+	Failed        bool
 }
 
 func (r *RPC) GetTxEvents(ctx context.Context, sig string) (TxEvents, error) {
@@ -312,10 +314,16 @@ func (r *RPC) GetTxEvents(ctx context.Context, sig string) (TxEvents, error) {
 			LogMessages       []string `json:"logMessages"`
 			InnerInstructions []struct {
 				Instructions []struct {
-					Data string `json:"data"`
+					ProgramIDIndex int    `json:"programIdIndex"`
+					Data           string `json:"data"`
 				} `json:"instructions"`
 			} `json:"innerInstructions"`
 		} `json:"meta"`
+		Transaction struct {
+			Message struct {
+				AccountKeys []string `json:"accountKeys"`
+			} `json:"message"`
+		} `json:"transaction"`
 	}
 	err := r.call(ctx, "getTransaction", []any{sig, map[string]any{"encoding": "json", "commitment": "confirmed",
 		"maxSupportedTransactionVersion": 1}}, &tx)
@@ -323,10 +331,16 @@ func (r *RPC) GetTxEvents(ctx context.Context, sig string) (TxEvents, error) {
 		return TxEvents{}, err
 	}
 	ev := TxEvents{Signature: sig, BlockTime: time.Unix(tx.BlockTime, 0).UTC(), Logs: tx.Meta.LogMessages, Failed: tx.Meta.Err != nil}
+	keys := tx.Transaction.Message.AccountKeys // invoked programs are always static keys
 	for _, ii := range tx.Meta.InnerInstructions {
 		for _, in := range ii.Instructions {
 			if b, err := base58.Decode(in.Data); err == nil {
+				prog := ""
+				if in.ProgramIDIndex >= 0 && in.ProgramIDIndex < len(keys) {
+					prog = keys[in.ProgramIDIndex]
+				}
 				ev.InnerData = append(ev.InnerData, b)
+				ev.InnerPrograms = append(ev.InnerPrograms, prog)
 			}
 		}
 	}
