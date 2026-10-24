@@ -227,11 +227,28 @@ type rpcErr struct {
 	Message string `json:"message"`
 }
 
+// ErrRateLimited is an HTTP 429 from the RPC provider.
+var ErrRateLimited = errors.New("rpc rate limited (429)")
+
+// call retries reads a few times on 429 with backoff. sendTransaction is never
+// retried here: the executor confirms and retries sends itself.
 func (r *RPC) call(ctx context.Context, method string, params []any, out any) error {
-	if err := r.wait(ctx); err != nil {
-		return err
+	backoff := time.Second
+	for attempt := 0; ; attempt++ {
+		if err := r.wait(ctx); err != nil {
+			return err
+		}
+		err := postJSONRPC(ctx, r.Client, r.URL, method, params, out)
+		if !errors.Is(err, ErrRateLimited) || method == "sendTransaction" || attempt == 3 {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
 	}
-	return postJSONRPC(ctx, r.Client, r.URL, method, params, out)
 }
 
 // GetMultipleAccounts returns raw account data for up to 100 addresses (nil where
@@ -328,6 +345,9 @@ func postJSONRPC(ctx context.Context, c *http.Client, url, method string, params
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return fmt.Errorf("%s: %w", method, ErrRateLimited)
+	}
 	var env struct {
 		Result json.RawMessage `json:"result"`
 		Error  *rpcErr         `json:"error"`
