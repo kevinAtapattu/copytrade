@@ -48,6 +48,8 @@ Every service is its own process with its own consumer group, so each can be sca
 
 **Self-discovery.** You don't need a wallet list to start. Ingest listens to PumpPortal's free migration stream (every token that graduated pump.fun, about 15x from launch), and discovery reads each one's earliest trades from Helius. Wallets that bought early and sold well on 2+ of them join the bench and start getting paper-tracked. Expect the first ones after hours to a day. `DISCOVERY_SEED_MIGRATIONS=false` turns it off.
 
+**Alerts (Discord).** Put a webhook in `DISCORD_WEBHOOK_URL`, then `docker compose up -d alerter`. You get executor closes and safety stops instantly, every closed paper copy in one hourly roll-up (who, token, our $ and %, their %, hold), and a daily summary at 9am. Paper buys, sim fills and bench changes never ping you. Tune with the `ALERT_*` settings in `.env.example`.
+
 **Spending guard.** Ingest meters every PumpPortal message. When `MSG_DAILY_BUDGET` (default 1000/day, at most about 0.001 SOL/day) is hit, all subscriptions pause until midnight UTC. A wallet trading more than `WALLET_MAX_TRADES_PER_HOUR` (default 30) is dropped automatically. The Health page shows both.
 
 ## What it costs to run (snapshot mode)

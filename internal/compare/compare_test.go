@@ -1,4 +1,4 @@
-package api
+package compare
 
 import (
 	"math"
@@ -18,12 +18,12 @@ func TestBuildCompareTheirReturnVsOurs(t *testing.T) {
 		{Mint: "B", Side: model.SideBuy, SolAmount: 1, TokenAmount: 1000, Pool: "pump", ReceivedAt: now.Add(-5 * time.Minute)},
 		{Mint: "B", Side: model.SideSell, SolAmount: 0.5, TokenAmount: 1000, Pool: "pump", ReceivedAt: now.Add(-4 * time.Minute)},
 		{Mint: "C", Side: model.SideBuy, SolAmount: 1, TokenAmount: 1000, Pool: "pump-amm", ReceivedAt: now}, // not copyable, ignored
-		{Mint: "D", Side: model.SideSell, SolAmount: 1, TokenAmount: 1000, Pool: "pump", ReceivedAt: now},     // bought before tracking
+		{Mint: "D", Side: model.SideSell, SolAmount: 1, TokenAmount: 1000, Pool: "pump", ReceivedAt: now},    // bought before tracking
 	}
 	ps := []model.SimPosition{
 		{Mint: "A", DelayS: 2, Status: model.PosClosed, ClosedAt: &closed, CostSol: 0.2, ProceedsSol: 0.3, SolUSD: 125},
 	}
-	rows, sum := buildCompare(trades, ps, func(string) *model.Token { return nil }, curve.Fees{}, now)
+	rows, sum := Build(trades, ps, func(string) *model.Token { return nil }, curve.Fees{}, now)
 	if len(rows) != 2 || rows[0].Mint != "B" || rows[1].Mint != "A" {
 		t.Fatalf("want rows B, A (newest first), got %+v", rows)
 	}

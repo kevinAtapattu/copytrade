@@ -27,9 +27,13 @@ func main() {
 		Fees:    sim.FeesFrom(c),
 		Grace:   3 * time.Second,
 	}, a.Store, price.New(a.Ctx, c.SolUSDFixed, c.SolUSDFallback))
-	eng.Sink = func(s model.SimTrade, _ model.SimPosition) {
+	eng.Sink = func(s model.SimTrade, p model.SimPosition) {
 		if !s.Skipped {
 			app.Emit(a.Ctx, a.Bus, "simulator", "sim_fill", "", s)
+		}
+		if p.ID != "" && p.Status != model.PosOpen {
+			// A paper copy finished (closed or migrated); the alerter rolls these up.
+			app.Emit(a.Ctx, a.Bus, "simulator", "copy_closed", "", p)
 		}
 	}
 	if err := eng.LoadOpen(a.Ctx); err != nil {

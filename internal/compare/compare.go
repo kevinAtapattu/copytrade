@@ -1,4 +1,6 @@
-package api
+// Package compare pairs a wallet's own result on each token with our paper copy's,
+// so the dashboard and alerts report the same "them vs us" numbers.
+package compare
 
 import (
 	"math"
@@ -11,28 +13,28 @@ import (
 	"copytrade/internal/score"
 )
 
-// copyResult is our paper copy of one token at one delay.
-type copyResult struct {
+// CopyResult is our paper copy of one token at one delay.
+type CopyResult struct {
 	CostSol float64 `json:"cost_sol"`
 	PnlUSD  float64 `json:"pnl_usd"`
 	PnlPct  float64 `json:"pnl_pct"`
 	Open    bool    `json:"open"`
 }
 
-// compareRow is one token a wallet traded: their return next to ours.
-type compareRow struct {
+// Row is one token a wallet traded: their return next to ours.
+type Row struct {
 	Mint       string                 `json:"mint"`
 	FirstBuyAt time.Time              `json:"first_buy_at"`
 	LastAt     time.Time              `json:"last_at"`
 	TheirSolIn float64                `json:"their_sol_in"`
 	TheirPct   float64                `json:"their_pct"`  // (sold + held marked) / spent - 1
 	TheirOpen  bool                   `json:"their_open"` // still holding >5% of what they bought
-	Ours       map[string]*copyResult `json:"ours"`       // by delay; missing = we did not copy (skipped)
+	Ours       map[string]*CopyResult `json:"ours"`       // by delay; missing = we did not copy (skipped)
 }
 
-// compareSummary is an equal-weight average over the tokens both sides traded,
+// Summary is an equal-weight average over the tokens both sides traded,
 // which matches our fixed-size copies: "if every one of their buys were $25".
-type compareSummary struct {
+type Summary struct {
 	Tokens   int                `json:"tokens"`
 	TheirAvg float64            `json:"their_avg_pct"`
 	OurAvg   map[string]float64 `json:"our_avg_pct"` // by delay, over the same tokens
@@ -45,10 +47,10 @@ type compareSummary struct {
 	HoldMedianS float64 `json:"hold_median_s"`
 }
 
-// buildCompare pairs a wallet's own trades with our simulated positions per token.
+// Build pairs a wallet's own trades with our simulated positions per token.
 // Their held tokens are marked by selling into the token's last curve state with no
 // fees (their real cost is unknown); ours use score.Value, fees included.
-func buildCompare(trades []model.Trade, ps []model.SimPosition, toks func(string) *model.Token, fees curve.Fees, now time.Time) ([]compareRow, compareSummary) {
+func Build(trades []model.Trade, ps []model.SimPosition, toks func(string) *model.Token, fees curve.Fees, now time.Time) ([]Row, Summary) {
 	type agg struct {
 		solIn, solOut, tokIn, tokOut float64
 		first, last                  time.Time
@@ -77,16 +79,16 @@ func buildCompare(trades []model.Trade, ps []model.SimPosition, toks func(string
 			a.last = t.ReceivedAt
 		}
 	}
-	ours := map[string]map[string]*copyResult{}
+	ours := map[string]map[string]*CopyResult{}
 	for _, p := range ps {
 		o := score.Value(p, toks(p.Mint), fees, now)
 		if ours[p.Mint] == nil {
-			ours[p.Mint] = map[string]*copyResult{}
+			ours[p.Mint] = map[string]*CopyResult{}
 		}
 		d := strconv.Itoa(p.DelayS)
 		c := ours[p.Mint][d]
 		if c == nil {
-			c = &copyResult{}
+			c = &CopyResult{}
 			ours[p.Mint][d] = c
 		}
 		c.CostSol += p.CostSol
@@ -97,7 +99,7 @@ func buildCompare(trades []model.Trade, ps []model.SimPosition, toks func(string
 		}
 		c.Open = c.Open || !o.Closed
 	}
-	var rows []compareRow
+	var rows []Row
 	for mint, a := range by {
 		if a.solIn <= 0 || a.tokIn <= 0 {
 			continue // bought before we tracked them
@@ -109,8 +111,8 @@ func buildCompare(trades []model.Trade, ps []model.SimPosition, toks func(string
 				mark = math.Max(f.SolAmount, 0)
 			}
 		}
-		r := compareRow{Mint: mint, FirstBuyAt: a.first, LastAt: a.last, TheirSolIn: a.solIn,
-			TheirPct: (a.solOut+mark)/a.solIn - 1, TheirOpen: held > a.tokIn*0.05, Ours: map[string]*copyResult{}}
+		r := Row{Mint: mint, FirstBuyAt: a.first, LastAt: a.last, TheirSolIn: a.solIn,
+			TheirPct: (a.solOut+mark)/a.solIn - 1, TheirOpen: held > a.tokIn*0.05, Ours: map[string]*CopyResult{}}
 		for d, c := range ours[mint] {
 			if c.CostSol > 0 {
 				c.PnlPct /= c.CostSol
@@ -121,7 +123,7 @@ func buildCompare(trades []model.Trade, ps []model.SimPosition, toks func(string
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].FirstBuyAt.After(rows[j].FirstBuyAt) })
 
-	sum := compareSummary{OurAvg: map[string]float64{}, Copied: map[string]int{}, TheirSame: map[string]float64{}, OurPnlUSD: map[string]float64{}}
+	sum := Summary{OurAvg: map[string]float64{}, Copied: map[string]int{}, TheirSame: map[string]float64{}, OurPnlUSD: map[string]float64{}}
 	var holds []float64
 	for _, r := range rows {
 		sum.Tokens++

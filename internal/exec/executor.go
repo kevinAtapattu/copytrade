@@ -331,6 +331,10 @@ func (e *Executor) recordLocked(ctx context.Context, f model.LiveFill, p *model.
 		kind = "info"
 	}
 	_ = bus.PublishJSON(ctx, e.Bus, bus.StreamEvents, model.Event{Kind: kind, At: f.SentAt, Service: "executor", Message: msg, Data: f})
+	if p != nil && p.Status != model.PosOpen {
+		_ = bus.PublishJSON(ctx, e.Bus, bus.StreamEvents, model.Event{Kind: "exec_closed", At: f.SentAt, Service: "executor",
+			Message: "[" + f.Mode + "] position closed", Data: p})
+	}
 }
 
 func fmtFill(f model.LiveFill) string {

@@ -169,3 +169,12 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 - **Cost control.** Migrations arrive every minute or so, far more than the RPC budget can scan. Discovery scans newest first and stops at `DISCOVERY_RPC_DAILY_MAX`; the backlog is just skipped. A graduated token whose history is longer than `DISCOVERY_MAX_PAGES` (raised to 15 x 1000 signatures) is skipped without decoding, because its "earliest" trades would really be mid-life ones.
 - **This can start PumpPortal charges on its own.** Discovered wallets go to the bench, and bench wallets are paper-tracked through metered `subscribeAccountTrade`. The daily message budget and per-wallet spam limit still cap it. Set `DISCOVERY_SEED_MIGRATIONS=false` to stop it.
 - Unrecognized PumpPortal messages that carry a mint are logged once, so a changed migration format is visible.
+
+## Alerts: three tiers instead of a ping per trade
+- With 20+ wallets, per-trade alerts would be hundreds a day. Alerts are now tiered (`internal/alert/policy.go`):
+  - **Instant:** executor position closed (paper or live, with our result, their result on the token and the wallet's 14d record), real-money fills, promotions to / demotions from live, budget hit, kill switch / daily loss limit (once a day), errors (same error at most every 3h, digits ignored). Capped at `ALERT_MAX_PER_HOUR`; anything held back is counted in the next roll-up.
+  - **Roll-up:** every closed paper copy at `ALERT_SIM_DELAY` in one message per `ALERT_ROLLUP_EVERY` (default 1h), biggest result first, each line with wallet, token, our $ and %, their % and hold time. Nothing closed means no message. Built to fit Discord's 2000-character limit.
+  - **Daily digest** at `ALERT_DIGEST_HOUR` in `ALERT_TZ`: 24h net, best/worst wallets, executor results, discoveries, drops, PumpPortal spend.
+- No longer instant: paper executor buys, executor rejections, bench drops (spam guard, inactivity), discovery adds, the new-day notice.
+- Roll-ups and the digest are built from the database for a time window, with the last window stored in `settings`, so container restarts neither lose nor repeat them. The first run starts at "now", so turning alerts on never dumps history. Stream events older than 1h (backlog after downtime) are not sent instantly.
+- "Their return" comes from one shared function (`internal/compare`) used by both the dashboard and alerts.

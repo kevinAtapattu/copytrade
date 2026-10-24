@@ -89,6 +89,11 @@ type Config struct {
 	DiscordWebhookURL string
 	TelegramBotToken  string
 	TelegramChatID    string
+	AlertSimDelay     int           // which delay's paper copies the roll-up reports
+	AlertRollupEvery  time.Duration // how often closed paper copies are batched into one message (0 = off)
+	AlertDigestHour   int           // local hour for the daily summary (-1 = off)
+	AlertTZ           string        // timezone for the digest hour
+	AlertMaxPerHour   int           // cap on immediate alerts
 }
 
 // Load reads .env (searching up from the working directory) then the environment.
@@ -163,6 +168,11 @@ func Load() Config {
 		DiscordWebhookURL: str("DISCORD_WEBHOOK_URL", ""),
 		TelegramBotToken:  str("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:    str("TELEGRAM_CHAT_ID", ""),
+		AlertSimDelay:     integer("ALERT_SIM_DELAY", 2),
+		AlertRollupEvery:  dur("ALERT_ROLLUP_EVERY", time.Hour),
+		AlertDigestHour:   integer("ALERT_DIGEST_HOUR", 9),
+		AlertTZ:           str("ALERT_TZ", "America/Toronto"),
+		AlertMaxPerHour:   integer("ALERT_MAX_PER_HOUR", 10),
 	}
 }
 

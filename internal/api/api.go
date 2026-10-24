@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"copytrade/internal/bus"
+	"copytrade/internal/compare"
 	"copytrade/internal/config"
 	"copytrade/internal/curve"
 	"copytrade/internal/model"
@@ -258,8 +259,8 @@ type walletRow struct {
 	// scores[delay][window]
 	Scores map[string]map[string]model.Score `json:"scores"`
 	Open   int                               `json:"open_positions"`
-	// Them vs us over the last 14 days (see buildCompare).
-	Compare compareSummary `json:"compare"`
+	// Them vs us over the last 14 days (see compare.Build).
+	Compare compare.Summary `json:"compare"`
 	// Their trades seen in the last 24h (activity).
 	Trades24h int `json:"trades_24h"`
 }
@@ -309,7 +310,7 @@ func (s *Server) wallets(w http.ResponseWriter, r *http.Request) {
 	fees := sim.FeesFrom(s.Cfg)
 	toks := s.tokenCache(ctx)
 	for addr, row := range rows {
-		_, row.Compare = buildCompare(ttBy[addr], psBy[addr], toks, fees, now)
+		_, row.Compare = compare.Build(ttBy[addr], psBy[addr], toks, fees, now)
 	}
 	for _, sc := range scores {
 		row := rows[sc.Wallet]
@@ -476,7 +477,7 @@ func (s *Server) walletDetail(w http.ResponseWriter, r *http.Request) {
 			myRots = append(myRots, x)
 		}
 	}
-	cmpRows, cmpSum := buildCompare(trades, ps, toks, fees, now)
+	cmpRows, cmpSum := compare.Build(trades, ps, toks, fees, now)
 	writeJSON(w, 200, map[string]any{"wallet": wl, "scores": mine, "score_history": history, "equity": curves,
 		"trades": rows, "positions": ps, "rotations": myRots, "compare": cmpRows, "compare_summary": cmpSum})
 }
