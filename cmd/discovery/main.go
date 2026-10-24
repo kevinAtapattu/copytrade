@@ -25,7 +25,7 @@ type capped struct {
 
 func (c capped) TokenTrades(ctx context.Context, tok model.Token) ([]model.Trade, error) {
 	if today, _ := c.rpc.Calls(); c.max > 0 && today >= c.max {
-		return nil, fmt.Errorf("discovery RPC daily cap (%d) reached", c.max)
+		return nil, fmt.Errorf("%w (%d calls)", jobs.ErrBudget, c.max)
 	}
 	return c.f.TokenTrades(ctx, tok)
 }

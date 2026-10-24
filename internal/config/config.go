@@ -56,14 +56,15 @@ type Config struct {
 	DropBadMinTrades int
 
 	// Discovery
-	DiscoveryInterval    time.Duration
-	DiscoveryMult        float64
-	DiscoveryEarlyMult   float64
-	DiscoveryExitMult    float64
-	DiscoveryMinHits     int
-	DiscoveryMaxPages    int
-	DiscoveryMaxTx       int
-	DiscoveryRPCDailyMax int64
+	DiscoveryInterval       time.Duration
+	DiscoveryMult           float64
+	DiscoveryEarlyMult      float64
+	DiscoveryExitMult       float64
+	DiscoveryMinHits        int
+	DiscoveryMaxPages       int
+	DiscoveryMaxTx          int
+	DiscoveryRPCDailyMax    int64
+	DiscoverySeedMigrations bool // scan tokens that completed their curve, found via PumpPortal's free migration stream
 
 	// API
 	APIAddr string
@@ -132,14 +133,15 @@ func Load() Config {
 		DropBadPnlUSD:    flt("DROP_BAD_PNL_USD", -50),
 		DropBadMinTrades: integer("DROP_BAD_MIN_TRADES", 15),
 
-		DiscoveryInterval:    dur("DISCOVERY_INTERVAL", 10*time.Minute),
-		DiscoveryMult:        flt("DISCOVERY_MULT", 5),
-		DiscoveryEarlyMult:   flt("DISCOVERY_EARLY_MULT", 1.5),
-		DiscoveryExitMult:    flt("DISCOVERY_EXIT_MULT", 2),
-		DiscoveryMinHits:     integer("DISCOVERY_MIN_HITS", 2),
-		DiscoveryMaxPages:    integer("DISCOVERY_MAX_PAGES", 5),
-		DiscoveryMaxTx:       integer("DISCOVERY_MAX_TX", 400),
-		DiscoveryRPCDailyMax: int64(integer("DISCOVERY_RPC_DAILY_MAX", 5000)),
+		DiscoveryInterval:       dur("DISCOVERY_INTERVAL", 10*time.Minute),
+		DiscoveryMult:           flt("DISCOVERY_MULT", 5),
+		DiscoveryEarlyMult:      flt("DISCOVERY_EARLY_MULT", 1.5),
+		DiscoveryExitMult:       flt("DISCOVERY_EXIT_MULT", 2),
+		DiscoveryMinHits:        integer("DISCOVERY_MIN_HITS", 2),
+		DiscoveryMaxPages:       integer("DISCOVERY_MAX_PAGES", 15),
+		DiscoveryMaxTx:          integer("DISCOVERY_MAX_TX", 400),
+		DiscoveryRPCDailyMax:    int64(integer("DISCOVERY_RPC_DAILY_MAX", 5000)),
+		DiscoverySeedMigrations: boolean("DISCOVERY_SEED_MIGRATIONS", true),
 
 		APIAddr: str("API_ADDR", ":8080"),
 

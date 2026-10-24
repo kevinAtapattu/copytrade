@@ -46,6 +46,8 @@ Every service is its own process with its own consumer group, so each can be sca
 
 **Data modes.** The default, `DATA_MODE=snapshot`, pays PumpPortal only for your wallets' own trades (about 1 message per trade). It reads token prices straight from each token's bonding curve over RPC, for free. `DATA_MODE=stream` also subscribes to every trade on every token your wallets hold. That costs 10-50x more, so only use it if you need the full tape.
 
+**Self-discovery.** You don't need a wallet list to start. Ingest listens to PumpPortal's free migration stream (every token that graduated pump.fun, about 15x from launch), and discovery reads each one's earliest trades from Helius. Wallets that bought early and sold well on 2+ of them join the bench and start getting paper-tracked. Expect the first ones after hours to a day. `DISCOVERY_SEED_MIGRATIONS=false` turns it off.
+
 **Spending guard.** Ingest meters every PumpPortal message. When `MSG_DAILY_BUDGET` (default 1000/day, at most about 0.001 SOL/day) is hit, all subscriptions pause until midnight UTC. A wallet trading more than `WALLET_MAX_TRADES_PER_HOUR` (default 30) is dropped automatically. The Health page shows both.
 
 ## What it costs to run (snapshot mode)

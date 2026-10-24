@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"time"
@@ -22,6 +23,18 @@ func main() {
 
 	src := source.NewPumpPortal(a.Cfg.PumpPortalWSURL, a.Cfg.PumpPortalAPIKey)
 	in := ingest.New(src, a.Store, a.Bus, a.Cfg.TokenUnsubCooldown, a.Cfg.TokenMaxWatch)
+	if a.Cfg.DiscoverySeedMigrations {
+		src.OnMigration = func(m source.Migration) {
+			// Off the reader goroutine; migrations arrive a few per minute at most.
+			go func() {
+				ctx, cancel := context.WithTimeout(a.Ctx, 10*time.Second)
+				defer cancel()
+				if err := ingest.SeedMigration(ctx, a.Store, m); err != nil {
+					slog.Warn("seed migrated token", "mint", m.Mint, "err", err)
+				}
+			}()
+		}
+	}
 	in.Guard = ingest.Guard{DailyBudget: a.Cfg.MsgDailyBudget, WalletMaxPerHour: a.Cfg.WalletMaxPerHour}
 	var snap *snapshot.Snapshotter
 	var rpc *solana.RPC
@@ -75,6 +88,7 @@ func main() {
 			"accounts":        s.Accounts,
 			"tokens":          s.Tokens,
 			"messages":        s.Messages,
+			"migrations":      s.Migrations,
 			"msgs_per_sec":    in.MsgsPerSec(time.Now()),
 			"est_sol_used":    float64(s.Messages) / 10000 * 0.01,
 			"has_api_key":     a.Cfg.PumpPortalAPIKey != "",

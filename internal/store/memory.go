@@ -223,6 +223,24 @@ func (m *Memory) UpsertTokenFromTrade(_ context.Context, t model.Trade) error {
 	return nil
 }
 
+func (m *Memory) SeedMigratedToken(_ context.Context, tok model.Token) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.tokens[tok.Mint]
+	if !ok {
+		tok.Migrated = true
+		m.tokens[tok.Mint] = tok
+		return true, nil
+	}
+	cur.Migrated = true
+	cur.MaxPrice = max(cur.MaxPrice, tok.MaxPrice)
+	if cur.CurveKey == "" {
+		cur.CurveKey = tok.CurveKey
+	}
+	m.tokens[tok.Mint] = cur
+	return false, nil
+}
+
 func (m *Memory) GetToken(_ context.Context, mint string) (model.Token, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

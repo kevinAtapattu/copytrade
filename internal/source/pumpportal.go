@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,6 +28,11 @@ type PumpPortal struct {
 	MaxBackoff time.Duration
 	BatchSize  int
 
+	// OnMigration, when set, subscribes to the free migration stream (tokens that
+	// completed their bonding curve) and is called for each one. Discovery uses
+	// these as candidate tokens that ran. It runs on the reader goroutine: return fast.
+	OnMigration func(m Migration)
+
 	mu       sync.Mutex
 	accounts map[string]bool
 	tokens   map[string]bool
@@ -36,6 +42,8 @@ type PumpPortal struct {
 	pauseCh  chan struct{} // wakes the session so it can close
 	resumeCh chan struct{} // wakes Run so it can reconnect
 	stats    Stats
+
+	loggedUnknown atomic.Bool
 }
 
 type ppCommand struct {
@@ -218,6 +226,12 @@ func (p *PumpPortal) session(ctx context.Context, h Handler) error {
 	if err := p.sendBatched(conn, "subscribeTokenTrade", tokens); err != nil {
 		return err
 	}
+	if p.OnMigration != nil {
+		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		if err := conn.WriteJSON(ppCommand{Method: "subscribeMigration"}); err != nil {
+			return err
+		}
+	}
 
 	type frame struct {
 		data []byte
@@ -270,6 +284,15 @@ func (p *PumpPortal) session(ctx context.Context, h Handler) error {
 		case f := <-frames:
 			t, ok := ParsePumpPortal(f.data, f.at)
 			if !ok {
+				if m, isMig := ParseMigration(f.data, f.at); isMig {
+					p.mu.Lock()
+					p.stats.Migrations++
+					p.mu.Unlock()
+					if p.OnMigration != nil {
+						p.OnMigration(m)
+					}
+					continue
+				}
 				p.handleControl(f.data)
 				continue
 			}
@@ -322,6 +345,11 @@ func (p *PumpPortal) handleControl(data []byte) {
 	}
 	if msg, ok := m["message"]; ok {
 		slog.Info("pumpportal", "message", msg)
+		return
+	}
+	if _, ok := m["mint"]; ok && !p.loggedUnknown.Swap(true) {
+		// Logged once so a changed message shape is visible without flooding the log.
+		slog.Warn("pumpportal: unrecognized message with a mint", "raw", string(data))
 	}
 }
 

@@ -59,3 +59,24 @@ func TestReplayHonorsSubscriptions(t *testing.T) {
 		t.Fatalf("delivered %v ticks %d", got, ticks)
 	}
 }
+
+func TestParseMigration(t *testing.T) {
+	at := time.Unix(1700000000, 0)
+	m, ok := ParseMigration([]byte(`{"signature":"SIG","mint":"MINT","txType":"migrate","pool":"pump-amm"}`), at)
+	if !ok || m.Mint != "MINT" || m.Pool != "pump-amm" || !m.At.Equal(at) {
+		t.Fatalf("got %+v ok=%v", m, ok)
+	}
+	for _, s := range []string{
+		`{"message":"Successfully subscribed to keys."}`,
+		`{"signature":"S","mint":"M","txType":"create"}`,
+		`{"txType":"migrate"}`,
+	} {
+		if _, ok := ParseMigration([]byte(s), at); ok {
+			t.Fatalf("should not parse as migration: %s", s)
+		}
+	}
+	// a migration must not be mistaken for a trade
+	if _, ok := ParsePumpPortal([]byte(`{"signature":"S","mint":"M","traderPublicKey":"T","txType":"migrate"}`), at); ok {
+		t.Fatal("migration parsed as trade")
+	}
+}

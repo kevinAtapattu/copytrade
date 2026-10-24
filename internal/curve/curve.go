@@ -13,6 +13,13 @@ const (
 	CompleteVirtualTokens = InitialVirtualTokens - RealTokenReserves
 )
 
+// LaunchPrice and CompletePrice are the spot prices (SOL/token) at launch and at
+// curve completion. A token that migrated ran CompletePrice/LaunchPrice (~14.7x).
+const (
+	LaunchPrice   = InitialVirtualSol / InitialVirtualTokens
+	CompletePrice = InitialVirtualSol * InitialVirtualTokens / (CompleteVirtualTokens * CompleteVirtualTokens)
+)
+
 var (
 	ErrComplete = errors.New("bonding curve complete")
 	ErrInvalid  = errors.New("invalid curve state or amount")

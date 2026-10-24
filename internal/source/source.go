@@ -35,7 +35,30 @@ type Stats struct {
 	LastError     string    `json:"last_error,omitempty"`
 	Accounts      int       `json:"accounts"`
 	Tokens        int       `json:"tokens"`
-	Messages      int64     `json:"messages"` // metered trade messages received
+	Messages      int64     `json:"messages"`   // metered trade messages received
+	Migrations    int64     `json:"migrations"` // free migration events received
+}
+
+// Migration is a token that completed its pump.fun bonding curve.
+type Migration struct {
+	Signature string
+	Mint      string
+	Pool      string
+	At        time.Time
+}
+
+// ParseMigration recognizes a migration event ({"txType":"migrate","mint":...}).
+func ParseMigration(raw []byte, receivedAt time.Time) (Migration, bool) {
+	var p struct {
+		Signature string `json:"signature"`
+		Mint      string `json:"mint"`
+		TxType    string `json:"txType"`
+		Pool      string `json:"pool"`
+	}
+	if json.Unmarshal(raw, &p) != nil || p.Mint == "" || !strings.Contains(strings.ToLower(p.TxType), "migrat") {
+		return Migration{}, false
+	}
+	return Migration{Signature: p.Signature, Mint: p.Mint, Pool: p.Pool, At: receivedAt.UTC()}, true
 }
 
 // flexFloat accepts JSON numbers or numeric strings.

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -86,6 +87,9 @@ func FindHits(tok model.Token, trades []model.Trade, tracked map[string]bool, c 
 	return hits
 }
 
+// ErrBudget is returned by a History that has used its daily allowance.
+var ErrBudget = errors.New("discovery daily RPC budget reached")
+
 // History supplies a token's trades for discovery. Stream mode reads what we
 // stored; snapshot mode fetches the token's early history from the chain.
 type History interface {
@@ -122,8 +126,14 @@ func Discover(ctx context.Context, st store.Store, b bus.Bus, c config.Config, n
 	if err != nil {
 		return res, err
 	}
+	// Newest first: when the RPC budget runs out, fresh tokens matter more than a backlog.
+	sort.SliceStable(toks, func(i, j int) bool { return toks[i].FirstSeen.After(toks[j].FirstSeen) })
 	for _, tok := range toks {
 		trades, err := hist.TokenTrades(ctx, tok)
+		if errors.Is(err, ErrBudget) {
+			slog.Info("discovery RPC budget used for today", "scanned", res.TokensScanned, "left", len(toks)-res.TokensScanned)
+			break
+		}
 		if err != nil {
 			// Leave the token unscanned so the next run retries it.
 			slog.Warn("token history", "mint", tok.Mint, "err", err)

@@ -55,6 +55,9 @@ type Store interface {
 	GetToken(ctx context.Context, mint string) (model.Token, bool, error)
 	ListTokens(ctx context.Context, minMaxMult float64, undiscoveredOnly bool) ([]model.Token, error)
 	MarkTokenDiscovered(ctx context.Context, mint string) error
+	// SeedMigratedToken records a token that completed its curve so discovery scans it.
+	// New tokens get the launch and completion prices; existing ones are marked migrated.
+	SeedMigratedToken(ctx context.Context, tok model.Token) (bool, error)
 
 	// Simulation
 	InsertSimTrade(ctx context.Context, s model.SimTrade) error

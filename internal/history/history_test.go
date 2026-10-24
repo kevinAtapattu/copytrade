@@ -108,3 +108,31 @@ func TestFetcherWalksBackAndDecodesEarliest(t *testing.T) {
 		t.Fatalf("should decode the oldest signatures first, got %v", txCalls)
 	}
 }
+
+func TestFetcherSkipsMigratedTokenWhenLaunchUnreachable(t *testing.T) {
+	var txCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		var res any
+		switch req.Method {
+		case "getSignaturesForAddress": // always a full page: history is longer than we walk
+			page := make([]map[string]any, 1000)
+			for i := range page {
+				page[i] = map[string]any{"signature": base58.Encode([]byte{byte(i >> 8), byte(i)}), "err": nil}
+			}
+			res = page
+		case "getTransaction":
+			txCalls++
+		}
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": res})
+	}))
+	defer srv.Close()
+	f := Fetcher{RPC: solana.NewRPC(srv.URL), MaxPages: 2, MaxTx: 10}
+	trades, err := f.TokenTrades(context.Background(), model.Token{Mint: mint, CurveKey: "CURVE", Migrated: true})
+	if err != nil || len(trades) != 0 || txCalls != 0 {
+		t.Fatalf("want skip with no tx calls, got %d trades, %d calls, err %v", len(trades), txCalls, err)
+	}
+}

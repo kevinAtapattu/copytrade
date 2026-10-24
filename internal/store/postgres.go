@@ -325,6 +325,16 @@ func (p *Postgres) UpsertTokenFromTrade(ctx context.Context, t model.Trade) erro
 	return tx.Commit(ctx)
 }
 
+func (p *Postgres) SeedMigratedToken(ctx context.Context, t model.Token) (bool, error) {
+	var inserted bool
+	err := p.pool.QueryRow(ctx, `INSERT INTO tokens (`+tokenCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,false,$10)
+		ON CONFLICT (mint) DO UPDATE SET migrated=true, max_price=GREATEST(tokens.max_price, EXCLUDED.max_price),
+		bonding_curve_key=CASE WHEN tokens.bonding_curve_key='' THEN EXCLUDED.bonding_curve_key ELSE tokens.bonding_curve_key END
+		RETURNING (xmax = 0)`,
+		t.Mint, t.FirstSeen, t.FirstPrice, t.MaxPrice, t.LastPrice, t.VSol, t.VTokens, t.Pool, t.LastTradeAt, t.CurveKey).Scan(&inserted)
+	return inserted, err
+}
+
 func (p *Postgres) GetToken(ctx context.Context, mint string) (model.Token, bool, error) {
 	t, err := scanToken(p.pool.QueryRow(ctx, `SELECT `+tokenCols+` FROM tokens WHERE mint=$1`, mint))
 	if errors.Is(err, pgx.ErrNoRows) {

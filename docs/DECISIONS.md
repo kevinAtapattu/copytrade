@@ -161,3 +161,11 @@ Choices made while building, so they can be revisited. Newest at the bottom of e
 
 ## Paper / Live view
 - Executor results are always tagged `paper` or `live`. The Executor page and the Overview's executor line show one mode at a time, through a toggle (`?mode=paper|live` on `/api/executor` and `/api/overview`). The default is the mode the executor is running in, so real-money totals (today's PnL, gap vs sim, equity) never include paper history. The trade log still lists every fill with its mode badge.
+
+## Self-discovery from graduated tokens
+- Discovery used to scan only tokens our tracked wallets touched, so with no wallets it found nothing. Ingest now also subscribes to PumpPortal's **free** `subscribeMigration` stream on its one existing connection (no second socket). It is free per the PumpPortal docs, and the spending guard does not count it.
+- Every token that completes its bonding curve has run about 14.7x from launch (vSol 30 to ~115). Each migration is stored as a token with `first_price` = launch price and `max_price` = completion price, so "early" is judged against the real launch, not our first sighting.
+- Discovery fetches the token's earliest curve transactions from Helius and runs the existing early-buyer / exited-well logic. A wallet that does this on `DISCOVERY_MIN_HITS` (2) tokens joins the bench.
+- **Cost control.** Migrations arrive every minute or so, far more than the RPC budget can scan. Discovery scans newest first and stops at `DISCOVERY_RPC_DAILY_MAX`; the backlog is just skipped. A graduated token whose history is longer than `DISCOVERY_MAX_PAGES` (raised to 15 x 1000 signatures) is skipped without decoding, because its "earliest" trades would really be mid-life ones.
+- **This can start PumpPortal charges on its own.** Discovered wallets go to the bench, and bench wallets are paper-tracked through metered `subscribeAccountTrade`. The daily message budget and per-wallet spam limit still cap it. Set `DISCOVERY_SEED_MIGRATIONS=false` to stop it.
+- Unrecognized PumpPortal messages that carry a mint are logged once, so a changed migration format is visible.

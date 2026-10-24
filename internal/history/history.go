@@ -130,6 +130,7 @@ func (f Fetcher) TokenTrades(ctx context.Context, tok model.Token) ([]model.Trad
 	}
 	var sigs []solana.SigInfo
 	before := ""
+	reachedStart := false
 	for page := 0; page < max(f.MaxPages, 1); page++ {
 		got, err := f.RPC.GetSignaturesForAddress(ctx, key, before, 1000)
 		if err != nil {
@@ -137,9 +138,15 @@ func (f Fetcher) TokenTrades(ctx context.Context, tok model.Token) ([]model.Trad
 		}
 		sigs = append(sigs, got...)
 		if len(got) < 1000 {
+			reachedStart = true
 			break
 		}
 		before = got[len(got)-1].Signature
+	}
+	if tok.Migrated && !reachedStart {
+		// A graduated token's "earliest" trades must really be its first ones; if the
+		// walk can't reach launch, skip it rather than spend calls on mid-life trades.
+		return nil, nil
 	}
 	// newest first -> oldest first, successful only
 	var ordered []solana.SigInfo
