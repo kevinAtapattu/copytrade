@@ -5,6 +5,9 @@ export const usd = (n: number | undefined | null, sign = false) => {
 };
 export const pct = (n: number | undefined | null, digits = 1) =>
   n == null || Number.isNaN(n) ? "-" : `${(n * 100).toFixed(digits)}%`;
+// Signed percent, e.g. +42% / -13%.
+export const spct = (n: number | undefined | null, digits = 0) =>
+  n == null || Number.isNaN(n) ? "-" : `${n > 0 ? "+" : ""}${(n * 100).toFixed(digits)}%`;
 export const num = (n: number | undefined | null, digits = 2) =>
   n == null || Number.isNaN(n) ? "-" : n.toLocaleString("en-US", { maximumFractionDigits: digits });
 export const sol = (n: number | undefined | null) => (n == null ? "-" : `${n.toFixed(4)} SOL`);

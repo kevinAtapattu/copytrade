@@ -3,12 +3,13 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import LineChart, { mergeSeries } from "@/components/LineChart";
 import { Err, Stat, Table } from "@/components/ui";
-import { Point, Rotation, Score, SimPosition, SimTrade, Trade, Wallet, useApi } from "@/lib/api";
-import { ago, dur, num, pct, pnlClass, price, short, time, usd } from "@/lib/format";
+import { CompareRow, CompareSummary, Point, Rotation, Score, SimPosition, SimTrade, Trade, Wallet, useApi } from "@/lib/api";
+import { ago, dur, num, pct, pnlClass, price, short, spct, time, usd } from "@/lib/format";
 
 type Detail = {
   wallet: Wallet; scores: Score[]; score_history: Record<string, Score[]>; equity: Record<string, Point[]>;
   trades: (Trade & { price: number; sims: Record<string, SimTrade> })[]; positions: SimPosition[]; rotations: Rotation[] | null;
+  compare: CompareRow[] | null; compare_summary: CompareSummary;
 };
 
 const DELAYS = [2, 10, 60];
@@ -41,6 +42,40 @@ export default function WalletDetail() {
             hint={`score ${num(s(d, 14)?.score)} · ex-best ${usd(s(d, 14)?.pnl_ex_best_usd, true)} · DD ${pct(s(d, 14)?.max_drawdown)}`} />
         ))}
         <Stat label="Win rate +2s (14d)" value={pct(s(2, 14)?.win_rate, 0)} hint={`${s(2, 14)?.positions ?? 0} positions, avg hold ${dur(s(2, 14)?.avg_hold_s)}`} />
+      </div>
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3>Them vs us, per token</h3>
+        <div className="sub" style={{ marginBottom: 10 }}>
+          Their return on each token from their own buys and sells, next to our $25 paper copy at each delay (after delay, fees and slippage).
+          Open positions are marked at the latest price.
+        </div>
+        <div className="grid stats" style={{ marginBottom: 12 }}>
+          {DELAYS.map((d) => {
+            const cs = data?.compare_summary, k = String(d), n = cs?.copied?.[k] ?? 0;
+            return (
+              <Stat key={d} label={`Avg per token at +${d}s`}
+                value={n ? <><span className={pnlClass(cs!.their_same_pct[k])}>{spct(cs!.their_same_pct[k])}</span> <span className="muted">vs</span> <span className={pnlClass(cs!.our_avg_pct[k])}>{spct(cs!.our_avg_pct[k])}</span></> : "-"}
+                hint={n ? `them vs us over ${n} copied tokens` : "no copies yet"} />
+            );
+          })}
+          <Stat label="Tokens they traded" value={String(data?.compare_summary?.tokens ?? 0)}
+            hint={`their avg ${spct(data?.compare_summary?.their_avg_pct)} on all of them`} />
+        </div>
+        <Table rows={data?.compare ?? []} rowKey={(r) => r.mint} empty="No pump.fun trades from this wallet yet" cols={[
+          { key: "at", label: "Their buy", sort: (r) => r.first_buy_at, render: (r) => time(r.first_buy_at) },
+          { key: "mint", label: "Token", render: (r) => <a className="mono" href={`https://pump.fun/coin/${r.mint}`} target="_blank">{short(r.mint)}</a> },
+          { key: "in", label: "They spent", num: true, sort: (r) => r.their_sol_in, render: (r) => `${num(r.their_sol_in, 2)} SOL` },
+          { key: "them", label: "Them", num: true, sort: (r) => r.their_pct,
+            render: (r) => <><b className={pnlClass(r.their_pct)}>{spct(r.their_pct)}</b>{r.their_open && <span className="muted"> holding</span>}</> },
+          ...DELAYS.map((d) => ({
+            key: `u${d}`, label: `Us +${d}s`, num: true, sort: (r: CompareRow) => r.ours?.[String(d)]?.pnl_pct ?? -1e9,
+            render: (r: CompareRow) => {
+              const c = r.ours?.[String(d)];
+              if (!c) return <span className="muted" title="Not copied: skipped (late, non-SOL, migrated) or still pending">-</span>;
+              return <span title={`${usd(c.pnl_usd, true)} on ${num(c.cost_sol, 3)} SOL`}><span className={pnlClass(c.pnl_pct)}>{spct(c.pnl_pct)}</span>{c.open && <span className="muted"> open</span>}</span>;
+            },
+          })),
+        ]} initialSort={{ key: "at", desc: true }} />
       </div>
       <div className="card" style={{ marginTop: 14 }}>
         <h3>Cumulative simulated PnL by delay (30d, USD)</h3>

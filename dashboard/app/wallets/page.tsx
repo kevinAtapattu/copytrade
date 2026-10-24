@@ -2,10 +2,10 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Col, Err, Seg, Table } from "@/components/ui";
-import { Score, Wallet, apiSend, useApi } from "@/lib/api";
-import { ago, dur, num, pct, pnlClass, short, usd } from "@/lib/format";
+import { CompareSummary, Score, Wallet, apiSend, useApi } from "@/lib/api";
+import { ago, dur, num, pct, pnlClass, short, spct, usd } from "@/lib/format";
 
-type Row = Wallet & { scores: Record<string, Record<string, Score>>; open_positions: number };
+type Row = Wallet & { scores: Record<string, Record<string, Score>>; open_positions: number; compare?: CompareSummary };
 
 export default function WalletsPage() {
   const [delay, setDelay] = useState(2);
@@ -30,6 +30,19 @@ export default function WalletsPage() {
     { key: "pnl", label: "Sim PnL", num: true, sort: (r) => sc(r)?.pnl_usd ?? -1e9, render: (r) => <span className={pnlClass(sc(r)?.pnl_usd)}>{usd(sc(r)?.pnl_usd, true)}</span> },
     { key: "exbest", label: "Ex best trade", num: true, sort: (r) => sc(r)?.pnl_ex_best_usd ?? -1e9,
       render: (r) => <span className={pnlClass(sc(r)?.pnl_ex_best_usd)}>{usd(sc(r)?.pnl_ex_best_usd, true)}{sc(r)?.lucky_trade ? " (lucky)" : ""}</span> },
+    { key: "vs", label: "Them vs us (14d)", num: true, sort: (r) => r.compare?.our_avg_pct?.[String(delay)] ?? -1e9,
+      render: (r) => {
+        const c = r.compare, d = String(delay), n = c?.copied?.[d] ?? 0;
+        if (!c || !n) return <span className="muted">{c?.tokens ? `${c.tokens} tokens, no copies yet` : "no trades yet"}</span>;
+        return (
+          <span title={`Average return per token over the ${n} tokens we copied at +${delay}s. Them = their own trades; us = our $25 paper copy after delay, fees and slippage.`}>
+            <span className={pnlClass(c.their_same_pct[d])}>{spct(c.their_same_pct[d])}</span>
+            <span className="muted"> vs </span>
+            <b className={pnlClass(c.our_avg_pct[d])}>{spct(c.our_avg_pct[d])}</b>
+            <span className="muted"> · {n}</span>
+          </span>
+        );
+      } },
     { key: "win", label: "Win rate", num: true, sort: (r) => sc(r)?.win_rate ?? 0, render: (r) => pct(sc(r)?.win_rate, 0) },
     { key: "dd", label: "Max DD", num: true, sort: (r) => sc(r)?.max_drawdown ?? 0, render: (r) => pct(sc(r)?.max_drawdown) },
     { key: "hold", label: "Avg hold", num: true, sort: (r) => sc(r)?.avg_hold_s ?? 0, render: (r) => dur(sc(r)?.avg_hold_s) },

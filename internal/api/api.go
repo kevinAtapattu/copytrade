@@ -258,6 +258,8 @@ type walletRow struct {
 	// scores[delay][window]
 	Scores map[string]map[string]model.Score `json:"scores"`
 	Open   int                               `json:"open_positions"`
+	// Them vs us over the last 14 days (see buildCompare).
+	Compare compareSummary `json:"compare"`
 }
 
 func (s *Server) wallets(w http.ResponseWriter, r *http.Request) {
@@ -286,6 +288,22 @@ func (s *Server) wallets(w http.ResponseWriter, r *http.Request) {
 		row := &walletRow{Wallet: wl, Scores: map[string]map[string]model.Score{}, Open: openBy[wl.Address]}
 		rows[wl.Address] = row
 		out = append(out, row)
+	}
+	now := s.Now()
+	since := now.AddDate(0, 0, -14)
+	tts, _ := s.Store.ListTargetTrades(ctx, store.TradeFilter{Since: since})
+	sps, _ := s.Store.ListSimPositions(ctx, store.SimFilter{Since: since})
+	ttBy, psBy := map[string][]model.Trade{}, map[string][]model.SimPosition{}
+	for _, t := range tts {
+		ttBy[t.Trader] = append(ttBy[t.Trader], t)
+	}
+	for _, p := range sps {
+		psBy[p.Wallet] = append(psBy[p.Wallet], p)
+	}
+	fees := sim.FeesFrom(s.Cfg)
+	toks := s.tokenCache(ctx)
+	for addr, row := range rows {
+		_, row.Compare = buildCompare(ttBy[addr], psBy[addr], toks, fees, now)
 	}
 	for _, sc := range scores {
 		row := rows[sc.Wallet]
@@ -452,8 +470,9 @@ func (s *Server) walletDetail(w http.ResponseWriter, r *http.Request) {
 			myRots = append(myRots, x)
 		}
 	}
+	cmpRows, cmpSum := buildCompare(trades, ps, toks, fees, now)
 	writeJSON(w, 200, map[string]any{"wallet": wl, "scores": mine, "score_history": history, "equity": curves,
-		"trades": rows, "positions": ps, "rotations": myRots})
+		"trades": rows, "positions": ps, "rotations": myRots, "compare": cmpRows, "compare_summary": cmpSum})
 }
 
 func thin(s []model.Score, n int) []model.Score {

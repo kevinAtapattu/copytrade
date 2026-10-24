@@ -10,6 +10,16 @@ export type Wallet = {
   address: string; label: string; status: "live" | "bench" | "dropped"; source: string; reason: string;
   added_at: string; status_at: string; last_trade_at?: string;
 };
+// Them vs us: a wallet's own return on each token next to our paper copy's (by delay).
+export type CopyResult = { cost_sol: number; pnl_usd: number; pnl_pct: number; open: boolean };
+export type CompareRow = {
+  mint: string; first_buy_at: string; last_at: string; their_sol_in: number; their_pct: number; their_open: boolean;
+  ours: Record<string, CopyResult>;
+};
+export type CompareSummary = {
+  tokens: number; their_avg_pct: number; our_avg_pct: Record<string, number>; copied: Record<string, number>;
+  their_same_pct: Record<string, number>;
+};
 export type Trade = {
   signature: string; mint: string; trader: string; side: "buy" | "sell"; sol_amount: number; token_amount: number;
   new_token_balance: number; v_sol: number; v_tokens: number; pool: string; received_at: string; is_target: boolean;
