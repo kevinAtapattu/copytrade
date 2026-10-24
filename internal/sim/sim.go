@@ -212,6 +212,8 @@ func (e *Engine) fill(ctx context.Context, p pending) {
 	pos := e.positions[key]
 
 	switch {
+	case t.Pool == "nonsol":
+		s.Skipped, s.SkipReason = true, "token is priced in another coin, not SOL (not copied)"
 	case ms == nil || !ms.st.Valid():
 		s.Skipped, s.SkipReason = true, "no curve state"
 	case t.Side == model.SideBuy:
