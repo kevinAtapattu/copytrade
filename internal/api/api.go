@@ -599,14 +599,21 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if t, err := s.Store.ListTokenTrades(ctx, store.TradeFilter{Limit: 1}); err == nil && len(t) > 0 {
 		lastTrade = t[0].ReceivedAt
 	}
+	// PumpPortal bills per wallet-trade message only when it is the wallet source;
+	// the Helius stream is free on its plan (data-capped instead).
+	paid := 0.01 / 10000
+	if s.Cfg.WalletSource == "helius" {
+		paid = 0
+	}
 	writeJSON(w, 200, map[string]any{
 		"now": now, "services": services, "stream_lag": lag,
+		"wallet_source":   s.Cfg.WalletSource,
 		"msgs_per_sec_1m": float64(lastMin) / 60,
 		"messages_today":  today,
 		"messages_24h":    last24,
-		"est_sol_today":   float64(today) / 10000 * 0.01,
-		"est_sol_24h":     float64(last24) / 10000 * 0.01,
-		"est_sol_month":   float64(last24) / 10000 * 0.01 * 30,
+		"est_sol_today":   float64(today) * paid,
+		"est_sol_24h":     float64(last24) * paid,
+		"est_sol_month":   float64(last24) * paid * 30,
 		"failed_tx_24h":   failed,
 		"live_fills_24h":  len(fills),
 		"last_trade_at":   lastTrade,

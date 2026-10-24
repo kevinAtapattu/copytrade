@@ -44,6 +44,8 @@ See `docs/PLAN.md` for phases, `docs/DECISIONS.md` for every judgment call, `CLA
 
 Every service is its own process with its own consumer group, so each can be scaled or swapped on its own. `internal/source.Source` is the seam for a future Helius gRPC / LaserStream source.
 
+**Where wallet trades come from.** By default (`WALLET_SOURCE=helius`) each tracked wallet is watched through Helius `logsSubscribe` on your free Helius key. It sees trades from every trading terminal, with about 1 second of lag, at no cost. PumpPortal's own wallet stream missed trades from popular terminals, so it now only carries the free graduated-token feed. See DECISIONS.md.
+
 **Data modes.** The default, `DATA_MODE=snapshot`, pays PumpPortal only for your wallets' own trades (about 1 message per trade). It reads token prices straight from each token's bonding curve over RPC, for free. `DATA_MODE=stream` also subscribes to every trade on every token your wallets hold. That costs 10-50x more, so only use it if you need the full tape.
 
 **Self-discovery.** You don't need a wallet list to start. Ingest listens to PumpPortal's free migration stream (every token that graduated pump.fun, about 15x from launch), and discovery reads each one's earliest trades from Helius. Wallets that bought early and sold well on 2+ of them join the bench and start getting paper-tracked. Expect the first ones after hours to a day. `DISCOVERY_SEED_MIGRATIONS=false` turns it off.

@@ -247,3 +247,6 @@ func NewStatic(trades []model.Trade) *Static {
 func (s *Static) TokenTrades(_ context.Context, tok model.Token) ([]model.Trade, error) {
 	return s.byMint[tok.Mint], nil
 }
+
+// IsTradeEvent reports whether b (8 bytes) is pump's TradeEvent discriminator.
+func IsTradeEvent(b []byte) bool { return len(b) == 8 && string(b) == string(tradeEventDisc) }

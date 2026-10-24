@@ -30,6 +30,9 @@ type Config struct {
 	TokenMaxWatch      time.Duration
 	WalletReload       time.Duration
 	MsgDailyBudget     int64
+	WalletSource       string  // "helius" (logsSubscribe, sees every terminal) or "pumpportal"
+	HeliusWSURL        string  // default: SOLANA_RPC_URL with wss://
+	HeliusWSDailyMB    float64 // data cap per UTC day for the Helius stream
 	WalletSpamPause    time.Duration
 	WalletMaxPerHour   int
 
@@ -116,6 +119,9 @@ func Load() Config {
 		TokenMaxWatch:      dur("TOKEN_MAX_WATCH", 24*time.Hour),
 		WalletReload:       dur("WALLET_RELOAD_INTERVAL", 30*time.Second),
 		MsgDailyBudget:     int64(integer("MSG_DAILY_BUDGET", 1000)),
+		WalletSource:       str("WALLET_SOURCE", "helius"),
+		HeliusWSURL:        str("HELIUS_WS_URL", ""),
+		HeliusWSDailyMB:    flt("HELIUS_WS_DAILY_MB", 150),
 		WalletMaxPerHour:   integer("WALLET_MAX_TRADES_PER_HOUR", 30),
 		WalletSpamPause:    dur("WALLET_SPAM_PAUSE", 6*time.Hour),
 

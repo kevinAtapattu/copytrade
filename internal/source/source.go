@@ -35,8 +35,9 @@ type Stats struct {
 	LastError     string    `json:"last_error,omitempty"`
 	Accounts      int       `json:"accounts"`
 	Tokens        int       `json:"tokens"`
-	Messages      int64     `json:"messages"`   // metered trade messages received
-	Migrations    int64     `json:"migrations"` // free migration events received
+	Messages      int64     `json:"messages"`    // metered trade messages received
+	Migrations    int64     `json:"migrations"`  // free migration events received
+	BytesToday    int64     `json:"bytes_today"` // data streamed today (Helius bills by volume)
 }
 
 // Migration is a token that completed its pump.fun bonding curve.

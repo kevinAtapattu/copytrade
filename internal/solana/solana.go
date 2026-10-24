@@ -426,6 +426,7 @@ func (r *RPC) IsBlockhashValid(ctx context.Context, blockhash string) (bool, err
 type BalanceChange struct {
 	SolDelta   float64 // post - pre, includes network fee (negative on buys)
 	TokenDelta float64 // post - pre for the mint, UI units
+	TokenAfter float64 // owner's balance of the mint after the tx, UI units
 	FeeSol     float64
 	BlockTime  time.Time
 }
@@ -469,7 +470,8 @@ func (r *RPC) GetBalanceChange(ctx context.Context, sig, owner, mint string) (Ba
 		FeeSol:    float64(tx.Meta.Fee) / LamportsPerSol,
 		BlockTime: time.Unix(tx.BlockTime, 0),
 	}
-	bc.TokenDelta = sumTok(tx.Meta.PostToken, owner, mint) - sumTok(tx.Meta.PreToken, owner, mint)
+	bc.TokenAfter = sumTok(tx.Meta.PostToken, owner, mint)
+	bc.TokenDelta = bc.TokenAfter - sumTok(tx.Meta.PreToken, owner, mint)
 	return bc, nil
 }
 
