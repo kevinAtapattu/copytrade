@@ -16,7 +16,7 @@ export default function TradesPage() {
       <div className="page-head">
         <div><h2>Trade log</h2><div className="sub">Latest 300 of each</div></div>
         <div className="row">
-          <Seg value={tab} onChange={setTab} options={[{ v: "target", label: "Target trades" }, { v: "sim", label: "Sim fills" }, { v: "live", label: "Executor fills" }]} />
+          <Seg value={tab} onChange={setTab} options={[{ v: "target", label: "Their trades" }, { v: "sim", label: "Our paper copies (sim)" }, { v: "live", label: "Executor (paper / live)" }]} />
           {tab === "sim" && <Seg value={delay} onChange={setDelay} options={[0, 2, 10, 60].map((d) => ({ v: d, label: d ? `+${d}s` : "all" }))} />}
         </div>
       </div>
