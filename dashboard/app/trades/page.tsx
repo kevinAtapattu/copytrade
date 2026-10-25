@@ -63,7 +63,9 @@ export default function TradesPage() {
             { key: "tok", label: "Tokens", num: true, render: (t) => num(t.token_amount, 0) },
             { key: "px", label: "Price after", help: "Token price in SOL right after their trade.", num: true, render: (t) => <span className="mono">{price(t.v_sol / t.v_tokens)}</span> },
             { key: "pool", label: "Copyable", help: help("nonsol"), render: (t) => t.pool === "nonsol" ? <span className="muted">no, other coin</span> : "yes" },
-            { key: "sig", label: "Tx", render: (t) => <a className="mono muted" href={`https://solscan.io/tx/${t.signature}`} target="_blank">{short(t.signature)}</a> },
+            { key: "sig", label: "Tx", render: (t) => t.signature.startsWith("exit-check:")
+              ? <span className="muted" title="They no longer hold this token but we saw no sell (moved to another account, or sold on an exchange we don't read). Treated as a full exit.">exit found by balance check</span>
+              : <a className="mono muted" href={`https://solscan.io/tx/${t.signature}`} target="_blank" rel="noreferrer">{short(t.signature)}</a> },
           ]} />
         )}
         {tab === "sim" && (

@@ -57,8 +57,8 @@ func Build(trades []model.Trade, ps []model.SimPosition, toks func(string) *mode
 	}
 	by := map[string]*agg{}
 	for _, t := range trades {
-		if t.Pool != "" && t.Pool != "pump" {
-			continue // we only copy bonding-curve trades
+		if !model.Priced(t.Pool) {
+			continue // we can't copy or price these (other-coin quote)
 		}
 		a := by[t.Mint]
 		if a == nil {

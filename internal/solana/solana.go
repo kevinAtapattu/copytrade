@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -293,6 +294,36 @@ func (r *RPC) GetSignaturesForAddress(ctx context.Context, addr, before string, 
 	var out []SigInfo
 	err := r.call(ctx, "getSignaturesForAddress", []any{addr, opts}, &out)
 	return out, err
+}
+
+// OwnerTokenBalance sums owner's balance of mint across all its token accounts
+// (any token program), in UI units. found=false when it has no account at all.
+func (r *RPC) OwnerTokenBalance(ctx context.Context, owner, mint string) (balance float64, found bool, err error) {
+	var out struct {
+		Value []struct {
+			Account struct {
+				Data struct {
+					Parsed struct {
+						Info struct {
+							TokenAmount struct {
+								UIAmountString string `json:"uiAmountString"`
+							} `json:"tokenAmount"`
+						} `json:"info"`
+					} `json:"parsed"`
+				} `json:"data"`
+			} `json:"account"`
+		} `json:"value"`
+	}
+	err = r.call(ctx, "getTokenAccountsByOwner", []any{owner, map[string]any{"mint": mint},
+		map[string]any{"encoding": "jsonParsed", "commitment": "confirmed"}}, &out)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, v := range out.Value {
+		f, _ := strconv.ParseFloat(v.Account.Data.Parsed.Info.TokenAmount.UIAmountString, 64)
+		balance += f
+	}
+	return balance, len(out.Value) > 0, nil
 }
 
 // TxEvents is the raw material for decoding program events from one transaction:

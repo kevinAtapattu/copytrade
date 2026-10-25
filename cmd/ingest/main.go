@@ -129,6 +129,29 @@ func main() {
 		slog.Info("recording trades for replay", "file", path)
 	}
 
+	// Exit check: catches wallets that leave a token without a trade we can see.
+	var exitCheck *ingest.Reconciler
+	if a.Cfg.ExitCheckEvery > 0 && a.Cfg.SolanaRPCURL != "" {
+		brpc := solana.NewRPC(a.Cfg.SolanaRPCURL)
+		brpc.RPS = 2
+		exitCheck = &ingest.Reconciler{In: in, Store: a.Store, Balances: brpc, MinAge: 2 * time.Minute}
+		go func() {
+			t := time.NewTicker(a.Cfg.ExitCheckEvery)
+			defer t.Stop()
+			for {
+				select {
+				case <-a.Ctx.Done():
+					return
+				case <-t.C:
+					ctx, cancel := context.WithTimeout(a.Ctx, time.Minute)
+					if err := exitCheck.Check(ctx); err != nil {
+						slog.Warn("exit check", "err", err)
+					}
+					cancel()
+				}
+			}
+		}()
+	}
 	a.Heartbeat(10*time.Second, func() any {
 		s := src.Stats()
 		ps := pp.Stats()
@@ -145,6 +168,8 @@ func main() {
 			"last_error":           s.LastError,
 			"accounts":             s.Accounts,
 			"quiet_accounts":       s.Quiet,
+			"exit_checks":          checks(exitCheck),
+			"exits_detected":       exits(exitCheck),
 			"tokens":               s.Tokens,
 			"messages":             s.Messages,
 			"migrations":           ps.Migrations,
@@ -166,4 +191,18 @@ func main() {
 	if err := in.Run(a.Ctx, a.Cfg.WalletReload); err != nil && a.Ctx.Err() == nil {
 		app.Fatal("ingest", err)
 	}
+}
+
+func checks(r *ingest.Reconciler) int64 {
+	if r == nil {
+		return 0
+	}
+	return r.Checks.Load()
+}
+
+func exits(r *ingest.Reconciler) int64 {
+	if r == nil {
+		return 0
+	}
+	return r.Exits.Load()
 }
