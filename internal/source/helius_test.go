@@ -64,6 +64,12 @@ type fakeChain struct {
 	sigs     []solana.SigInfo
 	txs      map[string]solana.TxEvents
 	accounts map[string][]byte
+	owners   map[string]float64 // owner+mint -> total balance across all accounts
+}
+
+func (f fakeChain) OwnerTokenBalance(_ context.Context, owner, mint string) (float64, bool, error) {
+	v, ok := f.owners[owner+mint]
+	return v, ok, nil
 }
 
 func (f fakeChain) GetMultipleAccounts(_ context.Context, addrs []string) ([][]byte, error) {
@@ -304,5 +310,20 @@ func TestHeliusDecodesPumpSwapSell(t *testing.T) {
 	// Someone else's PumpSwap trade in the same tx is not ours.
 	if other := h.convert(context.Background(), note{wallet: hWallet, sig: fx.Sell.Signature, logs: fx.Sell.Logs, at: time.Now()}); len(other) != 0 {
 		t.Fatalf("attributed to the wrong wallet: %+v", other)
+	}
+}
+
+// theo keeps one token in two accounts: a sell that empties one of them must not
+// read as a full exit (our copy would sell everything instead of a third).
+func TestSellBalanceCountsAllAccounts(t *testing.T) {
+	sell := model.Trade{Signature: "S", Trader: hWallet, Mint: hMint, Side: model.SideSell, TokenAmount: 29.8e6}
+	h := NewHelius("", fakeChain{after: map[string]float64{"S": 0}, owners: map[string]float64{hWallet + hMint: 61.4e6}}, 0)
+	if got := h.balanceAfter(context.Background(), sell); got != 61.4e6 {
+		t.Fatalf("balance after %v, want 61.4M held in the other account", got)
+	}
+	// A real full exit stays a full exit.
+	h = NewHelius("", fakeChain{after: map[string]float64{"S": 0}, owners: map[string]float64{}}, 0)
+	if got := h.balanceAfter(context.Background(), sell); got != 0 {
+		t.Fatalf("balance after %v, want 0", got)
 	}
 }

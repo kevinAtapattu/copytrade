@@ -18,6 +18,7 @@ import (
 	"copytrade/internal/compare"
 	"copytrade/internal/config"
 	"copytrade/internal/curve"
+	"copytrade/internal/ingest"
 	"copytrade/internal/model"
 	"copytrade/internal/score"
 	"copytrade/internal/seed"
@@ -332,7 +333,7 @@ func (s *Server) wallets(w http.ResponseWriter, r *http.Request) {
 	dayAgo := now.Add(-24 * time.Hour)
 	for _, t := range tts {
 		ttBy[t.Trader] = append(ttBy[t.Trader], t)
-		if row := rows[t.Trader]; row != nil && !t.ReceivedAt.Before(dayAgo) {
+		if row := rows[t.Trader]; row != nil && !t.ReceivedAt.Before(dayAgo) && !strings.HasPrefix(t.Signature, ingest.SignaturePrefix) {
 			row.Trades24h++
 		}
 	}

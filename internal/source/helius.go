@@ -74,6 +74,7 @@ type ChainReader interface {
 	GetTxEvents(ctx context.Context, sig string) (solana.TxEvents, error)
 	GetSignaturesForAddress(ctx context.Context, addr, before string, limit int) ([]solana.SigInfo, error)
 	GetMultipleAccounts(ctx context.Context, addrs []string) ([][]byte, error)
+	OwnerTokenBalance(ctx context.Context, owner, mint string) (float64, bool, error)
 }
 
 func NewHelius(wsURL string, chain ChainReader, dailyMB float64) *Helius {
@@ -632,6 +633,9 @@ func (h *Helius) balanceAfter(ctx context.Context, t model.Trade) float64 {
 			bc, err := h.Chain.GetBalanceChange(cctx, sig, t.Trader, t.Mint)
 			cancel()
 			if err == nil {
+				if t.Side == model.SideSell {
+					return h.sellBalance(ctx, t, bc.TokenAfter)
+				}
 				return bc.TokenAfter
 			}
 			select {
@@ -645,6 +649,20 @@ func (h *Helius) balanceAfter(ctx context.Context, t model.Trade) float64 {
 		return t.TokenAmount
 	}
 	return 0
+}
+
+// sellBalance corrects a sell's balance-after for wallets that keep one token in
+// several accounts (theo does): the tx only shows the accounts it touched, so
+// emptying one looks like a full exit. Their total across all accounts, read now
+// (about a second later), wins when it is higher.
+func (h *Helius) sellBalance(ctx context.Context, t model.Trade, inTx float64) float64 {
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	total, found, err := h.Chain.OwnerTokenBalance(cctx, t.Trader, t.Mint)
+	cancel()
+	if err == nil && found && total > inTx {
+		return total
+	}
+	return inTx
 }
 
 // TradesFromLogs decodes the wallet's pump.fun trades from a transaction's logs.

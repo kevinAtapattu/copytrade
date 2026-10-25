@@ -346,9 +346,11 @@ func ID(parts ...string) string {
 	return hex.EncodeToString(h.Sum(nil))[:24]
 }
 
-// FeesFrom builds the fee model from config.
+// FeesFrom builds the fee model from config. Paper copies pay what the live
+// trader would: PumpPortal's trade fee on every buy and sell, unless a different
+// bot fee is configured (BOT_FEE_ENABLED).
 func FeesFrom(c config.Config) curve.Fees {
-	f := curve.Fees{PumpPct: c.PumpFeePct, AMMPct: c.PumpSwapFeePct, NetworkSol: c.BaseFeeSol + c.PriorityFeeSol}
+	f := curve.Fees{PumpPct: c.PumpFeePct, AMMPct: c.PumpSwapFeePct, BotPct: c.PumpPortalLocalFeePct, NetworkSol: c.BaseFeeSol + c.PriorityFeeSol}
 	if c.BotFeeEnabled {
 		f.BotPct = c.BotFeePct
 	}
