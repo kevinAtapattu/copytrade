@@ -41,7 +41,7 @@ func Value(p model.SimPosition, tok *model.Token, fees curve.Fees, now time.Time
 	}
 	mark := 0.0
 	if tok != nil && p.TokensHeld > 0 {
-		if f, err := curve.Sell(curve.State{VSol: tok.VSol, VTokens: tok.VTokens}, p.TokensHeld, fees); err == nil {
+		if f, err := curve.Sell(curve.State{VSol: tok.VSol, VTokens: tok.VTokens, AMM: tok.Pool == model.PoolPumpSwap}, p.TokensHeld, fees); err == nil {
 			mark = math.Max(f.SolAmount, 0)
 		}
 	}

@@ -83,6 +83,13 @@ type Token struct {
 	CurveKey    string    `json:"bonding_curve_key"`
 }
 
+// PoolPumpSwap marks a trade or price on PumpSwap, the AMM pump.fun tokens move
+// to when they graduate. Priced like the curve (constant product), see curve.State.AMM.
+const PoolPumpSwap = "pumpswap"
+
+// Priced reports whether our SOL math can price trades on this pool.
+func Priced(pool string) bool { return pool == "" || pool == "pump" || pool == PoolPumpSwap }
+
 // SimTrade is one simulated copy fill.
 type SimTrade struct {
 	ID            string    `json:"id"`

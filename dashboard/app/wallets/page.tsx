@@ -59,11 +59,11 @@ export default function WalletsPage() {
           </span>
         );
       } },
-    { key: "t24", label: "Trades 24h", help: "How many trades they made in the last 24 hours.", num: true, sort: (r) => r.trades_24h ?? 0, render: (r) => r.trades_24h ?? 0 },
+    { key: "t24", label: "Trades 24h", help: "How many trades they made in the last 24 hours. Not every trade becomes a copy: we copy only the first buy of each token, and skip tokens priced in another coin.", num: true, sort: (r) => r.trades_24h ?? 0, render: (r) => r.trades_24h ?? 0 },
     { key: "hold", label: "Their typical hold", help: help("hold"), num: true, sort: (r) => r.compare?.hold_median_s ?? -1,
       render: (r) => (r.compare?.hold_median_s ? dur(r.compare.hold_median_s) : <span className="muted">-</span>) },
     { key: "win", label: "Won (closed)", help: `${help("winRate")} Open copies don't count until they're sold.`, num: true, sort: (r) => sc(r)?.win_rate ?? 0,
-      render: (r) => sc(r)?.closed ? <span title={`${sc(r)!.closed} closed copies`}>{pct(sc(r)?.win_rate, 0)}</span> : <span className="muted">-</span> },
+      render: (r) => sc(r)?.closed ? <span title={`${Math.round((sc(r)!.win_rate) * sc(r)!.closed)} of ${sc(r)!.closed} closed copies made money`}>{pct(sc(r)?.win_rate, 0)} <span className="muted">of {sc(r)!.closed}</span></span> : <span className="muted">-</span> },
     { key: "status", label: "Status", sort: (r) => (r.status === "live" ? 0 : r.status === "dropped" ? 2 : 1),
       render: (r) => <span className="row nowrap">
         <span className={`badge ${r.status === "paused" ? "bench" : r.status}`} title={`${STATUS_HELP[r.status] ?? ""}${r.reason ? `\n\nLast change: ${r.reason}` : ""}`}>{STATUS_LABEL[r.status] ?? r.status}</span>

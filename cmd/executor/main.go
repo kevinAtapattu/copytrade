@@ -72,7 +72,7 @@ func main() {
 func buildTrader(live bool, a *app.App) exec.Trader {
 	c := a.Cfg
 	if !live {
-		return exec.Paper{Fees: curve.Fees{PumpPct: c.PumpFeePct, BotPct: c.PumpPortalLocalFeePct,
+		return exec.Paper{Fees: curve.Fees{PumpPct: c.PumpFeePct, AMMPct: c.PumpSwapFeePct, BotPct: c.PumpPortalLocalFeePct,
 			NetworkSol: c.BaseFeeSol + c.ExecPriorityFee + c.JitoTipSol}}
 	}
 	if c.TraderPrivateKey == "" {

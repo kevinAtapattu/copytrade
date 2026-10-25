@@ -67,6 +67,15 @@ func DeriveBondingCurve(mint string) (string, error) {
 	return base58.Encode(addr), nil
 }
 
+// FindPDA derives a program address from seeds (base58 program id).
+func FindPDA(seeds [][]byte, program string) ([]byte, error) {
+	prog, err := base58.Decode(program)
+	if err != nil || len(prog) != 32 {
+		return nil, errors.New("bad program id")
+	}
+	return findProgramAddress(seeds, prog)
+}
+
 func findProgramAddress(seeds [][]byte, program []byte) ([]byte, error) {
 	for bump := 255; bump >= 0; bump-- {
 		h := sha256.New()

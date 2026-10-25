@@ -192,9 +192,11 @@ func ApplyTradeToToken(tok model.Token, exists bool, t model.Trade) model.Token 
 	if t.BondingCurveKey != "" {
 		tok.CurveKey = t.BondingCurveKey
 	}
-	if t.Pool != "" && t.Pool != "pump" {
+	if !model.Priced(t.Pool) {
 		tok.Migrated = true
-		tok.Pool = t.Pool
+		if tok.Pool != model.PoolPumpSwap { // keep the pool price once we have one
+			tok.Pool = t.Pool
+		}
 		tok.LastTradeAt = t.ReceivedAt
 		return tok
 	}
@@ -209,6 +211,9 @@ func ApplyTradeToToken(tok model.Token, exists bool, t model.Trade) model.Token 
 		tok.VSol, tok.VTokens = t.VSol, t.VTokens
 	}
 	tok.Pool = "pump"
+	if t.Pool == model.PoolPumpSwap {
+		tok.Pool, tok.Migrated = model.PoolPumpSwap, true
+	}
 	if t.ReceivedAt.After(tok.LastTradeAt) {
 		tok.LastTradeAt = t.ReceivedAt
 	}

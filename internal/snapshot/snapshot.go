@@ -5,6 +5,10 @@
 //
 // Each read is published on the trades stream as a "snapshot" trade carrying the
 // curve's reserves, so the simulator and executor need no changes.
+//
+// Once a token graduates its curve is frozen, so (with Accounts set) it is read
+// from its PumpSwap pool instead: the pool account (for the virtual SOL reserve)
+// and its two vaults, published as pool "pumpswap".
 package snapshot
 
 import (
@@ -18,6 +22,7 @@ import (
 	"copytrade/internal/bus"
 	"copytrade/internal/curve"
 	"copytrade/internal/model"
+	"copytrade/internal/pumpswap"
 	"copytrade/internal/solana"
 	"copytrade/internal/store"
 )
@@ -73,10 +78,15 @@ type Snapshotter struct {
 	// SkipMarks, if set and returning true, skips periodic marks (e.g. RPC daily cap hit).
 	// Fill reads at +2/+10/+60s are never skipped.
 	SkipMarks func() bool
+	// Accounts reads raw accounts for PumpSwap pools. nil = graduated tokens stay
+	// at their last curve state (replay).
+	Accounts AccountReader
 
 	mu       sync.Mutex
 	quote    map[string]string // mint -> pool classification ("pump" or "nonsol")
 	keys     map[string]string // mint -> bonding curve address
+	amm      map[string]bool   // mint -> graduated: read its PumpSwap pool
+	pools    map[string]poolInfo
 	watched  map[string]bool
 	pending  []req
 	lastMark time.Time
@@ -87,7 +97,8 @@ type Snapshotter struct {
 
 func New(r Reader, b bus.Bus, st store.Store, delays []int, markEvery time.Duration) *Snapshotter {
 	return &Snapshotter{Reader: r, Bus: b, Store: st, Delays: delays, MarkEvery: markEvery,
-		keys: map[string]string{}, watched: map[string]bool{}, quote: map[string]string{}}
+		keys: map[string]string{}, watched: map[string]bool{}, quote: map[string]string{},
+		amm: map[string]bool{}, pools: map[string]poolInfo{}}
 }
 
 // OnTrade schedules fill-time reads for each tracked trade on the bonding curve.
@@ -97,7 +108,10 @@ func (s *Snapshotter) OnTrade(t model.Trade) {
 	if t.BondingCurveKey != "" {
 		s.keys[t.Mint] = t.BondingCurveKey
 	}
-	if !t.IsTarget || (t.Pool != "" && t.Pool != "pump") {
+	if t.Pool == model.PoolPumpSwap {
+		s.amm[t.Mint] = true
+	}
+	if !t.IsTarget || !model.Priced(t.Pool) {
 		return
 	}
 	for _, d := range s.Delays {
@@ -211,11 +225,27 @@ func (s *Snapshotter) Tick(ctx context.Context, now time.Time) {
 				want = append(want, j.mint)
 			}
 		}
+		// Graduated tokens: read the pool. Others: the curve (which may turn out complete).
+		s.mu.Lock()
+		var onCurve, onPool []string
+		for _, m := range want {
+			if s.amm[m] && s.Accounts != nil {
+				onPool = append(onPool, m)
+			} else {
+				onCurve = append(onCurve, m)
+			}
+		}
+		s.mu.Unlock()
+		want = onCurve
 		keys := make([]string, len(want))
 		for i, m := range want {
 			keys[i] = curves[idx[m]]
 		}
-		res, err := s.Reader.Read(ctx, keys, st)
+		var res []Result
+		var err error
+		if len(want) > 0 {
+			res, err = s.Reader.Read(ctx, keys, st)
+		}
 		s.mu.Lock()
 		s.reads++
 		if err != nil {
@@ -234,10 +264,127 @@ func (s *Snapshotter) Tick(ctx context.Context, now time.Time) {
 			continue
 		}
 		for i, m := range want {
-			if res[i].Found {
-				s.publish(ctx, m, keys[i], res[i].Account, st)
+			if !res[i].Found {
+				continue
+			}
+			if res[i].Account.Complete && res[i].Account.QuoteMint == "" && s.Accounts != nil {
+				s.mu.Lock()
+				s.amm[m] = true // graduated: from now on read the pool
+				s.mu.Unlock()
+				onPool = append(onPool, m)
+				continue
+			}
+			s.publish(ctx, m, keys[i], res[i].Account, st)
+		}
+		s.readPools(ctx, onPool, st)
+	}
+}
+
+// AccountReader reads raw accounts (solana.RPC.GetMultipleAccounts).
+type AccountReader interface {
+	GetMultipleAccounts(ctx context.Context, addrs []string) ([][]byte, error)
+}
+
+type poolInfo struct {
+	addr string
+	pool pumpswap.Pool
+}
+
+// readPools prices graduated tokens from their PumpSwap pools: pool account
+// (virtual SOL reserve, re-read every time) plus both vaults, in one batched call.
+func (s *Snapshotter) readPools(ctx context.Context, mints []string, at time.Time) {
+	if len(mints) == 0 || s.Accounts == nil {
+		return
+	}
+	// First sight of a pool: find its vaults.
+	var newMints, newAddrs []string
+	s.mu.Lock()
+	for _, m := range mints {
+		if _, ok := s.pools[m]; !ok {
+			if a, err := pumpswap.DerivePool(m); err == nil {
+				newMints, newAddrs = append(newMints, m), append(newAddrs, a)
 			}
 		}
+	}
+	s.mu.Unlock()
+	if len(newAddrs) > 0 {
+		datas, err := s.Accounts.GetMultipleAccounts(ctx, newAddrs)
+		s.count(err)
+		if err == nil {
+			s.mu.Lock()
+			for i, d := range datas {
+				if p, perr := pumpswap.ParsePool(d); d != nil && perr == nil {
+					s.pools[newMints[i]] = poolInfo{newAddrs[i], p}
+					if !p.SOLQuoted() {
+						s.quote[newMints[i]] = PoolNonSOL
+					}
+				}
+			}
+			s.mu.Unlock()
+		}
+	}
+	type item struct {
+		mint string
+		info poolInfo
+	}
+	var items []item
+	s.mu.Lock()
+	for _, m := range mints {
+		if pi, ok := s.pools[m]; ok && pi.pool.SOLQuoted() {
+			items = append(items, item{m, pi})
+		}
+	}
+	s.mu.Unlock()
+	for i := 0; i < len(items); i += 33 { // 3 accounts each, 100 per request
+		batch := items[i:min(i+33, len(items))]
+		var addrs []string
+		for _, it := range batch {
+			addrs = append(addrs, it.info.addr, it.info.pool.BaseVault, it.info.pool.QuoteVault)
+		}
+		datas, err := s.Accounts.GetMultipleAccounts(ctx, addrs)
+		s.count(err)
+		if err != nil {
+			slog.Warn("pumpswap pool read", "err", err)
+			continue
+		}
+		for k, it := range batch {
+			p := it.info.pool
+			if fresh, perr := pumpswap.ParsePool(datas[3*k]); datas[3*k] != nil && perr == nil {
+				p = fresh
+			}
+			st, serr := p.State(datas[3*k+1], datas[3*k+2])
+			if serr != nil || !st.Valid() {
+				continue
+			}
+			s.publishPool(ctx, it.mint, st, at)
+		}
+	}
+}
+
+func (s *Snapshotter) count(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	if err != nil {
+		s.errors++
+		s.lastErr = err.Error()
+	}
+}
+
+func (s *Snapshotter) publishPool(ctx context.Context, mint string, st curve.State, at time.Time) {
+	s.mu.Lock()
+	key := s.keys[mint]
+	s.mu.Unlock()
+	t := model.Trade{
+		Signature: fmt.Sprintf("snap:%s:%d", mint, at.UnixNano()), Mint: mint, Side: SideSnapshot,
+		VSol: st.VSol, VTokens: st.VTokens, MarketCapSol: st.Price() * 1e9,
+		Pool: model.PoolPumpSwap, BondingCurveKey: key, ReceivedAt: at,
+	}
+	if err := s.Store.UpsertTokenFromTrade(ctx, t); err != nil {
+		slog.Warn("upsert token from pool snapshot", "err", err)
+	}
+	if err := bus.PublishJSON(ctx, s.Bus, bus.StreamTrades, t); err != nil {
+		slog.Warn("publish pool snapshot", "err", err)
 	}
 }
 
@@ -274,7 +421,7 @@ func poolOf(a curve.Account) string {
 // Pool. Fails open: on an RPC error the trade passes unchanged and the +2s read
 // will flag it.
 func (s *Snapshotter) Classify(ctx context.Context, t model.Trade) model.Trade {
-	if !t.IsTarget || (t.Pool != "" && t.Pool != "pump") {
+	if !t.IsTarget || !model.Priced(t.Pool) || t.Pool == model.PoolPumpSwap {
 		return t
 	}
 	s.mu.Lock()

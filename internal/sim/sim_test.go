@@ -234,3 +234,34 @@ func TestTickWallUsesStreamTimeDuringBacklog(t *testing.T) {
 		}
 	}
 }
+
+// After graduation the wallet trades on PumpSwap: we copy the buy at the pool
+// price with the AMM fee, and their sell closes the copy (not "migrated").
+func TestCopiesOnPumpSwap(t *testing.T) {
+	st := store.NewMemory()
+	e := New(Params{SizeUSD: 25, Delays: []int{2}, Fees: curve.Fees{PumpPct: 1.25, AMMPct: 1.0, NetworkSol: 0.0005}}, st, price.Fixed(150))
+	ctx := context.Background()
+	pool := curve.State{VSol: 80, VTokens: 300e6, AMM: true}
+	tr := func(sig, side string, at time.Duration, target bool, bal float64) model.Trade {
+		return model.Trade{Signature: sig, Mint: "M", Trader: "W", Side: side, Pool: model.PoolPumpSwap, IsTarget: target,
+			VSol: pool.VSol, VTokens: pool.VTokens, ReceivedAt: t0.Add(at), NewTokenBalance: bal, TokenAmount: 1e6}
+	}
+	// A frozen "curve complete" read arrives late; it must not undo the pool price.
+	e.HandleTrade(ctx, tr("b", model.SideBuy, 0, true, 1e6))
+	e.HandleTrade(ctx, model.Trade{Signature: "late", Mint: "M", Side: "snapshot", Pool: "migrated", ReceivedAt: t0.Add(time.Second)})
+	e.Tick(ctx, t0.Add(time.Minute))
+	ps, _ := st.ListSimPositions(ctx, store.SimFilter{})
+	if len(ps) != 1 || ps[0].Status != model.PosOpen {
+		t.Fatalf("buy on PumpSwap not copied: %+v", ps)
+	}
+	want, _ := curve.Buy(pool, 25.0/150, curve.Fees{PumpPct: 1.25, AMMPct: 1.0, NetworkSol: 0.0005})
+	if d := ps[0].TokensBought - want.Tokens; d > 1 || d < -1 {
+		t.Fatalf("tokens %.0f, want %.0f at the pool price with the AMM fee", ps[0].TokensBought, want.Tokens)
+	}
+	e.HandleTrade(ctx, tr("s", model.SideSell, 2*time.Minute, true, 0))
+	e.Tick(ctx, t0.Add(5*time.Minute))
+	ps, _ = st.ListSimPositions(ctx, store.SimFilter{})
+	if ps[0].Status != model.PosClosed || ps[0].ProceedsSol <= 0 {
+		t.Fatalf("sell on PumpSwap should close the copy: %+v", ps[0])
+	}
+}

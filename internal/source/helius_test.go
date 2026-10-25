@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -59,9 +60,18 @@ func TestTradesFromLogs(t *testing.T) {
 }
 
 type fakeChain struct {
-	after map[string]float64
-	sigs  []solana.SigInfo
-	txs   map[string]solana.TxEvents
+	after    map[string]float64
+	sigs     []solana.SigInfo
+	txs      map[string]solana.TxEvents
+	accounts map[string][]byte
+}
+
+func (f fakeChain) GetMultipleAccounts(_ context.Context, addrs []string) ([][]byte, error) {
+	out := make([][]byte, len(addrs))
+	for i, a := range addrs {
+		out[i] = f.accounts[a]
+	}
+	return out, nil
 }
 
 func (f fakeChain) GetBalanceChange(_ context.Context, sig, owner, mint string) (solana.BalanceChange, error) {
@@ -253,5 +263,46 @@ func TestHeliusMovesNoisyWalletToQuietFeed(t *testing.T) {
 	case tr := <-got:
 		t.Fatalf("unexpected trade %+v", tr)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// bust's real PumpSwap sell of Hiog5y (after it graduated) becomes a sell on pool
+// "pumpswap", with the mint from the pool account. Before this, it was dropped.
+func TestHeliusDecodesPumpSwapSell(t *testing.T) {
+	raw, err := os.ReadFile("../pumpswap/testdata/mainnet.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx struct {
+		Sell struct {
+			Signature string   `json:"signature"`
+			Logs      []string `json:"logs"`
+		} `json:"sell"`
+		PoolB64 string `json:"pool_b64"`
+	}
+	_ = json.Unmarshal(raw, &fx)
+	poolData, _ := base64.StdEncoding.DecodeString(fx.PoolB64)
+	const bust = "FzVQSzj8JJr6WMGqbUHzx2XH1KkrfxRrRPv6WcbbZmND"
+	h := NewHelius("", fakeChain{after: map[string]float64{fx.Sell.Signature: 0},
+		accounts: map[string][]byte{"4xMCDt7EuE1HDA6h4AF2F9xQWSBk1BXduj3y7eukkVby": poolData}}, 0)
+	if !mentionsTrade(fx.Sell.Logs) {
+		t.Fatal("a PumpSwap-only tx must pass the notification filter")
+	}
+	got := h.convert(context.Background(), note{wallet: bust, sig: fx.Sell.Signature, logs: fx.Sell.Logs, at: time.Unix(1792890588, 0)})
+	if len(got) != 1 {
+		t.Fatalf("trades %+v", got)
+	}
+	tr := got[0]
+	if tr.Mint != "Hiog5ybjwPKa2bENQTyK9yNMEjUdUX9SStdRVRHLpump" || tr.Pool != model.PoolPumpSwap || tr.Side != model.SideSell ||
+		tr.TokenAmount < 5740740 || tr.TokenAmount > 5740741 || tr.NewTokenBalance != 0 || tr.BondingCurveKey == "" {
+		t.Fatalf("trade %+v", tr)
+	}
+	// Post-trade price includes the pool's virtual SOL (~17.58): (66.55 + 17.58) / 220.09M.
+	if p := tr.Price(); p < 3.7e-7 || p > 3.9e-7 {
+		t.Fatalf("price %.3e", p)
+	}
+	// Someone else's PumpSwap trade in the same tx is not ours.
+	if other := h.convert(context.Background(), note{wallet: hWallet, sig: fx.Sell.Signature, logs: fx.Sell.Logs, at: time.Now()}); len(other) != 0 {
+		t.Fatalf("attributed to the wrong wallet: %+v", other)
 	}
 }

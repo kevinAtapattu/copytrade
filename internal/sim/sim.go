@@ -55,7 +55,8 @@ type Engine struct {
 type mintState struct {
 	st       curve.State
 	at       time.Time
-	migrated bool
+	migrated bool // graduated and we have no PumpSwap price: frozen at the last curve state
+	amm      bool // priced from its PumpSwap pool
 }
 
 type posKey struct {
@@ -112,9 +113,16 @@ func (e *Engine) HandleTrade(ctx context.Context, t model.Trade) {
 		ms = &mintState{}
 		e.mints[t.Mint] = ms
 	}
-	if t.Pool != "" && t.Pool != "pump" {
-		ms.migrated = true
-	} else if t.VSol > 0 && t.VTokens > 0 {
+	switch {
+	case t.Pool == model.PoolPumpSwap && t.VSol > 0 && t.VTokens > 0:
+		ms.st = curve.State{VSol: t.VSol, VTokens: t.VTokens, AMM: true}
+		ms.at = t.ReceivedAt
+		ms.amm, ms.migrated = true, false
+	case !model.Priced(t.Pool):
+		if !ms.amm { // a late "curve complete" read must not undo a pool price
+			ms.migrated = true
+		}
+	case t.VSol > 0 && t.VTokens > 0 && !ms.amm:
 		ms.st = curve.State{VSol: t.VSol, VTokens: t.VTokens}
 		ms.at = t.ReceivedAt
 	}
@@ -340,7 +348,7 @@ func ID(parts ...string) string {
 
 // FeesFrom builds the fee model from config.
 func FeesFrom(c config.Config) curve.Fees {
-	f := curve.Fees{PumpPct: c.PumpFeePct, NetworkSol: c.BaseFeeSol + c.PriorityFeeSol}
+	f := curve.Fees{PumpPct: c.PumpFeePct, AMMPct: c.PumpSwapFeePct, NetworkSol: c.BaseFeeSol + c.PriorityFeeSol}
 	if c.BotFeeEnabled {
 		f.BotPct = c.BotFeePct
 	}

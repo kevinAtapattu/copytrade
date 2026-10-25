@@ -25,10 +25,13 @@ var (
 	ErrInvalid  = errors.New("invalid curve state or amount")
 )
 
-// State is the virtual reserve pair.
+// State is the virtual reserve pair. AMM marks a PumpSwap pool (a token that
+// graduated): the same constant-product math, but no completion limit and the
+// AMM's fee instead of the curve's.
 type State struct {
 	VSol    float64
 	VTokens float64
+	AMM     bool
 }
 
 func (s State) Valid() bool { return s.VSol > 0 && s.VTokens > 0 }
@@ -47,9 +50,9 @@ func (s State) BuyOut(solIn float64) (float64, State, error) {
 		return 0, s, ErrInvalid
 	}
 	k := s.VSol * s.VTokens
-	ns := State{VSol: s.VSol + solIn}
+	ns := State{VSol: s.VSol + solIn, AMM: s.AMM}
 	ns.VTokens = k / ns.VSol
-	if ns.VTokens < CompleteVirtualTokens {
+	if !s.AMM && ns.VTokens < CompleteVirtualTokens {
 		return 0, s, ErrComplete
 	}
 	return s.VTokens - ns.VTokens, ns, nil
@@ -61,7 +64,7 @@ func (s State) SellOut(tokensIn float64) (float64, State, error) {
 		return 0, s, ErrInvalid
 	}
 	k := s.VSol * s.VTokens
-	ns := State{VTokens: s.VTokens + tokensIn}
+	ns := State{VTokens: s.VTokens + tokensIn, AMM: s.AMM}
 	ns.VSol = k / ns.VTokens
 	return s.VSol - ns.VSol, ns, nil
 }
@@ -69,8 +72,18 @@ func (s State) SellOut(tokensIn float64) (float64, State, error) {
 // Fees is the cost model for one copy trade.
 type Fees struct {
 	PumpPct    float64 // pump.fun curve fee, percent of SOL side
+	AMMPct     float64 // PumpSwap fee (LP + protocol + creator), percent of SOL side, for AMM states
 	BotPct     float64 // trading bot fee, percent of SOL side (0 if disabled)
 	NetworkSol float64 // base fee + priority fee per transaction
+}
+
+// For returns the fees that apply on s: on a PumpSwap pool the venue fee is
+// AMMPct (reported in the PumpFeeSol fields).
+func (f Fees) For(s State) Fees {
+	if s.AMM {
+		f.PumpPct = f.AMMPct
+	}
+	return f
 }
 
 // Fill is the result of a simulated buy or sell.
@@ -90,6 +103,7 @@ type Fill struct {
 // Buy spends budgetSol in total. Network fee comes off the top; pump and bot fees
 // are charged on top of the SOL that enters the curve, like pump.fun does.
 func Buy(s State, budgetSol float64, f Fees) (Fill, error) {
+	f = f.For(s)
 	curveSol := (budgetSol - f.NetworkSol) / (1 + f.PumpPct/100 + f.BotPct/100)
 	if curveSol <= 0 {
 		return Fill{}, ErrInvalid
@@ -109,6 +123,7 @@ func Buy(s State, budgetSol float64, f Fees) (Fill, error) {
 
 // Sell sells tokens. Fees are taken from the SOL that leaves the curve.
 func Sell(s State, tokens float64, f Fees) (Fill, error) {
+	f = f.For(s)
 	gross, _, err := s.SellOut(tokens)
 	if err != nil {
 		return Fill{}, err

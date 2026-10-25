@@ -114,7 +114,11 @@ func EventsFromTx(tx solana.TxEvents) []Event {
 
 // PumpLogData returns the decoded "Program data:" payloads emitted while the pump
 // program was the executing frame. Logs without invoke lines (fixtures) are unscoped.
-func PumpLogData(logs []string) [][]byte {
+func PumpLogData(logs []string) [][]byte { return ProgramLogData(logs, curve.PumpProgram) }
+
+// ProgramLogData returns the "Program data:" payloads emitted while program was
+// the innermost running program. Unframed logs (tests) are returned whole.
+func ProgramLogData(logs []string, program string) [][]byte {
 	framed := false
 	for _, l := range logs {
 		if strings.HasPrefix(l, "Program ") && strings.Contains(l, " invoke [") {
@@ -127,7 +131,7 @@ func PumpLogData(logs []string) [][]byte {
 	for _, l := range logs {
 		switch {
 		case strings.HasPrefix(l, "Program data: "):
-			if framed && (len(stack) == 0 || stack[len(stack)-1] != curve.PumpProgram) {
+			if framed && (len(stack) == 0 || stack[len(stack)-1] != program) {
 				continue
 			}
 			if b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(l, "Program data: ")); err == nil {

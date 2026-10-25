@@ -34,6 +34,7 @@ type Config struct {
 	HeliusWSURL         string  // default: SOLANA_RPC_URL with wss://
 	HeliusWSDailyMB     float64 // data cap per UTC day for the Helius stream
 	HeliusWalletDailyMB float64 // per-wallet data cap per UTC day (bot-noise guard)
+	PumpSwapFeePct      float64 // all-in PumpSwap fee (LP + protocol + creator) for graduated tokens
 	WalletMaxPerDay     int
 
 	// Simulation
@@ -123,6 +124,7 @@ func Load() Config {
 		HeliusWSURL:         str("HELIUS_WS_URL", ""),
 		HeliusWSDailyMB:     flt("HELIUS_WS_DAILY_MB", 300),
 		HeliusWalletDailyMB: flt("HELIUS_WALLET_DAILY_MB", 10),
+		PumpSwapFeePct:      flt("PUMPSWAP_FEE_PCT", 1.25),
 		WalletMaxPerDay:     integer("WALLET_MAX_TRADES_PER_DAY", 1000),
 
 		CopySizeUSD:    flt("COPY_SIZE_USD", 25),

@@ -93,6 +93,7 @@ func main() {
 		rpc = solana.NewRPC(a.Cfg.SolanaRPCURL)
 		rpc.RPS = a.Cfg.RPCRPS
 		snap = snapshot.New(snapshot.RPCReader{RPC: rpc}, a.Bus, a.Store, model.Delays, a.Cfg.MarkInterval)
+		snap.Accounts = rpc // graduated tokens: price from their PumpSwap pool
 		snap.SkipMarks = func() bool {
 			today, _ := rpc.Calls()
 			return a.Cfg.RPCDailyMax > 0 && today >= a.Cfg.RPCDailyMax

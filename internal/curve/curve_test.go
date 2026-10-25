@@ -107,3 +107,19 @@ func TestRoundTripCostsAboutFees(t *testing.T) {
 		t.Fatalf("round trip loss %.4f outside expected ~3%%", loss)
 	}
 }
+
+func TestAMMStateHasNoCompletionLimitAndUsesAMMFee(t *testing.T) {
+	// A pool with fewer tokens than a completed curve: the curve would refuse the buy.
+	s := State{VSol: 90, VTokens: 200e6, AMM: true}
+	f := Fees{PumpPct: 1.25, AMMPct: 0.5}
+	b, err := Buy(s, 1, f)
+	if err != nil || b.Tokens <= 0 {
+		t.Fatalf("buy %+v %v", b, err)
+	}
+	if want := b.CurveSol * 0.005; b.PumpFeeSol < want*0.999 || b.PumpFeeSol > want*1.001 {
+		t.Fatalf("fee %.6f, want AMM 0.5%% = %.6f", b.PumpFeeSol, want)
+	}
+	if _, err := Buy(State{VSol: 90, VTokens: 200e6}, 1, f); err == nil {
+		t.Fatal("a bonding curve past completion must still refuse")
+	}
+}

@@ -107,7 +107,7 @@ func Build(trades []model.Trade, ps []model.SimPosition, toks func(string) *mode
 		held := math.Max(a.tokIn-a.tokOut, 0)
 		mark := 0.0
 		if tok := toks(mint); tok != nil && held > 0 {
-			if f, err := curve.Sell(curve.State{VSol: tok.VSol, VTokens: tok.VTokens}, held, curve.Fees{}); err == nil {
+			if f, err := curve.Sell(curve.State{VSol: tok.VSol, VTokens: tok.VTokens, AMM: tok.Pool == model.PoolPumpSwap}, held, curve.Fees{}); err == nil {
 				mark = math.Max(f.SolAmount, 0)
 			}
 		}

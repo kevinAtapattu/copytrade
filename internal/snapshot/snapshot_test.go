@@ -2,7 +2,9 @@ package snapshot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -88,3 +90,67 @@ func TestTickPublishesFillAndMarkReads(t *testing.T) {
 }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+type fakeAccounts map[string][]byte
+
+func (f fakeAccounts) GetMultipleAccounts(_ context.Context, addrs []string) ([][]byte, error) {
+	out := make([][]byte, len(addrs))
+	for i, a := range addrs {
+		out[i] = f[a]
+	}
+	return out, nil
+}
+
+func vault(amount uint64) []byte {
+	b := make([]byte, 165)
+	for i := 0; i < 8; i++ {
+		b[64+i] = byte(amount >> (8 * i))
+	}
+	return b
+}
+
+// A graduated token's curve is frozen; the snapshot must switch to its PumpSwap
+// pool (vaults + virtual SOL reserve) and publish pool "pumpswap".
+func TestGraduatedTokenReadFromPumpSwapPool(t *testing.T) {
+	raw, err := os.ReadFile("../pumpswap/testdata/mainnet.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx struct {
+		PoolB64 string `json:"pool_b64"`
+	}
+	_ = json.Unmarshal(raw, &fx)
+	poolData, _ := base64.StdEncoding.DecodeString(fx.PoolB64)
+	const mint = "Hiog5ybjwPKa2bENQTyK9yNMEjUdUX9SStdRVRHLpump"
+	accts := fakeAccounts{
+		"4xMCDt7EuE1HDA6h4AF2F9xQWSBk1BXduj3y7eukkVby": poolData,
+		"2TGBhPbrxYP5XFhDYnRdPSxdBAtnqWJNxbjvUnP6WT5N": vault(500_000_000_000_000), // 500M tokens
+		"2nDPiv8FZfGr9z8ryUshaMK623SyJQRbdoiRarCcE9oa": vault(12_000_000_000),      // 12 SOL
+	}
+	r := &fakeReader{accts: map[string]curve.Account{"CURVE": {State: curve.State{VSol: 115, VTokens: 279.9e6}, Complete: true}}}
+	b := bus.NewMemory()
+	var pub []model.Trade
+	b.Register(bus.StreamTrades, func(_ context.Context, p []byte) error {
+		var tr model.Trade
+		_ = jsonUnmarshal(p, &tr)
+		pub = append(pub, tr)
+		return nil
+	})
+	st := store.NewMemory()
+	s := New(r, b, st, model.Delays, time.Minute)
+	s.Accounts = accts
+	s.OnTrade(model.Trade{Mint: mint, BondingCurveKey: "CURVE", IsTarget: true, Pool: "pump", ReceivedAt: t0})
+	ctx := context.Background()
+	s.Tick(ctx, t0.Add(2*time.Second))
+	if len(pub) != 1 || pub[0].Pool != model.PoolPumpSwap || pub[0].VTokens != 500e6 || pub[0].VSol < 29.5 || pub[0].VSol > 29.7 {
+		t.Fatalf("published %+v", pub)
+	}
+	calls := r.calls
+	s.Tick(ctx, t0.Add(10*time.Second))
+	if r.calls != calls || len(pub) != 2 || pub[1].Pool != model.PoolPumpSwap {
+		t.Fatalf("after graduating, reads must go to the pool only: curve calls %d->%d, %+v", calls, r.calls, pub)
+	}
+	if tok, ok, _ := st.GetToken(ctx, mint); !ok || tok.Pool != model.PoolPumpSwap || !tok.Migrated || tok.VTokens != 500e6 {
+		t.Fatalf("token %+v", tok)
+	}
+}

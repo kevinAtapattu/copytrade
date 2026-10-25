@@ -116,9 +116,15 @@ func (e *Executor) OpenCount() int {
 func (e *Executor) HandleTrade(ctx context.Context, t model.Trade) {
 	e.mu.Lock()
 	e.rollDay(t.ReceivedAt)
-	if t.Pool != "" && t.Pool != "pump" {
-		e.migrated[t.Mint] = true
-	} else if t.VSol > 0 && t.VTokens > 0 {
+	switch {
+	case t.Pool == model.PoolPumpSwap && t.VSol > 0 && t.VTokens > 0:
+		e.curves[t.Mint] = curve.State{VSol: t.VSol, VTokens: t.VTokens, AMM: true}
+		delete(e.migrated, t.Mint)
+	case !model.Priced(t.Pool):
+		if !e.curves[t.Mint].AMM {
+			e.migrated[t.Mint] = true
+		}
+	case t.VSol > 0 && t.VTokens > 0 && !e.curves[t.Mint].AMM:
 		e.curves[t.Mint] = curve.State{VSol: t.VSol, VTokens: t.VTokens}
 	}
 	var jobs []func()

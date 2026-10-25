@@ -16,6 +16,7 @@ import (
 	"copytrade/internal/curve"
 	"copytrade/internal/history"
 	"copytrade/internal/model"
+	"copytrade/internal/pumpswap"
 	"copytrade/internal/solana"
 )
 
@@ -59,6 +60,12 @@ type Helius struct {
 	bytes    int64
 	byWallet map[string]int64 // today's bytes per wallet
 	quiet    map[string]bool  // wallets on the balance-change feed
+	pools    map[string]poolEntry
+}
+
+type poolEntry struct {
+	p  pumpswap.Pool
+	at time.Time
 }
 
 // ChainReader is the slice of the RPC client Helius needs.
@@ -66,11 +73,12 @@ type ChainReader interface {
 	GetBalanceChange(ctx context.Context, sig, owner, mint string) (solana.BalanceChange, error)
 	GetTxEvents(ctx context.Context, sig string) (solana.TxEvents, error)
 	GetSignaturesForAddress(ctx context.Context, addr, before string, limit int) ([]solana.SigInfo, error)
+	GetMultipleAccounts(ctx context.Context, addrs []string) ([][]byte, error)
 }
 
 func NewHelius(wsURL string, chain ChainReader, dailyMB float64) *Helius {
 	return &Helius{URL: wsURL, Chain: chain, DailyMB: dailyMB, MinBackoff: 3 * time.Second, MaxBackoff: 5 * time.Minute,
-		accounts: map[string]bool{}, quiet: map[string]bool{}, dirty: make(chan struct{}, 1), pauseCh: make(chan struct{}, 1), resumeCh: make(chan struct{}, 1)}
+		accounts: map[string]bool{}, quiet: map[string]bool{}, pools: map[string]poolEntry{}, dirty: make(chan struct{}, 1), pauseCh: make(chan struct{}, 1), resumeCh: make(chan struct{}, 1)}
 }
 
 func (h *Helius) SubscribeAccounts(keys []string)   { h.setAccounts(keys, true) }
@@ -453,7 +461,7 @@ func (h *Helius) session(ctx context.Context, work chan<- note) error {
 			if w == "" || v.Err != nil || v.Signature == "" {
 				continue // unknown sub, or a failed tx
 			}
-			if !mentionsPump(v.Logs) {
+			if !mentionsTrade(v.Logs) {
 				continue // transfers, airdrop spam, other DEXes
 			}
 			select {
@@ -464,6 +472,9 @@ func (h *Helius) session(ctx context.Context, work chan<- note) error {
 		}
 	}
 }
+
+// mentionsTrade: the pump.fun curve or PumpSwap (where tokens trade after graduating) ran.
+func mentionsTrade(logs []string) bool { return mentionsPump(logs) || pumpswap.Mentions(logs) }
 
 func mentionsPump(logs []string) bool {
 	for _, l := range logs {
@@ -481,14 +492,17 @@ func (h *Helius) convert(ctx context.Context, n note) []model.Trade {
 		return h.convertQuiet(ctx, n)
 	}
 	trades, truncated := TradesFromLogs(n.sig, n.wallet, n.logs, n.at)
-	if truncated && h.Chain != nil {
+	amm := pumpswap.EventsFromLogs(n.logs)
+	if (truncated || pumpswap.Mentions(n.logs) && len(amm) == 0) && h.Chain != nil {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		tx, err := h.Chain.GetTxEvents(cctx, n.sig)
 		cancel()
 		if err == nil && !tx.Failed {
 			trades = tradesFromEvents(n.sig, n.wallet, history.EventsFromTx(tx), n.at)
+			amm = pumpswap.EventsFromTx(tx)
 		}
 	}
+	trades = append(trades, h.ammTrades(ctx, n.sig, n.wallet, amm, n.at)...)
 	for i := range trades {
 		t := &trades[i]
 		t.NewTokenBalance = h.balanceAfter(ctx, *t)
@@ -529,16 +543,83 @@ func (h *Helius) convertQuiet(ctx context.Context, n note) []model.Trade {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		tx, err := h.Chain.GetTxEvents(cctx, sig)
 		cancel()
-		if err != nil || tx.Failed || !mentionsPump(tx.Logs) {
+		if err != nil || tx.Failed || !mentionsTrade(tx.Logs) {
 			continue // a SOL transfer, another DEX, or a lookup error
 		}
 		ts := tradesFromEvents(sig, n.wallet, history.EventsFromTx(tx), n.at)
+		ts = append(ts, h.ammTrades(ctx, sig, n.wallet, pumpswap.EventsFromTx(tx), n.at)...)
 		for i := range ts {
 			ts[i].NewTokenBalance = h.balanceAfter(ctx, ts[i])
 		}
 		trades = append(trades, ts...)
 	}
 	return trades
+}
+
+// ammTrades turns the wallet's PumpSwap events into trades on pool "pumpswap"
+// (or "nonsol" for pools not quoted in SOL). The mint and the pool's virtual SOL
+// reserve come from the pool account.
+func (h *Helius) ammTrades(ctx context.Context, sig, wallet string, evs []pumpswap.Event, at time.Time) []model.Trade {
+	var mine []pumpswap.Event
+	for _, e := range evs {
+		if e.User == wallet {
+			mine = append(mine, e)
+		}
+	}
+	var out []model.Trade
+	for i, e := range mine {
+		p, ok := h.pool(ctx, e.Pool)
+		if !ok {
+			h.setErr("pumpswap pool lookup failed; dropped a trade")
+			continue
+		}
+		st := e.After(p.VirtualQuote)
+		t := model.Trade{Signature: sig, Mint: p.BaseMint, Trader: wallet, Side: model.SideSell,
+			SolAmount: e.Quote, TokenAmount: e.Base, VSol: st.VSol, VTokens: st.VTokens,
+			MarketCapSol: st.Price() * 1e9, Pool: model.PoolPumpSwap, ReceivedAt: at.UTC()}
+		if e.IsBuy {
+			t.Side = model.SideBuy
+		}
+		if !p.SOLQuoted() {
+			t.Pool = "nonsol"
+		}
+		if len(mine) > 1 {
+			t.Signature = fmt.Sprintf("%s#a%d", sig, i)
+		}
+		if key, err := curve.DeriveBondingCurve(t.Mint); err == nil {
+			t.BondingCurveKey = key
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// pool returns a PumpSwap pool account, cached for 10 minutes (the virtual
+// reserve can drift; the rest never changes).
+func (h *Helius) pool(ctx context.Context, addr string) (pumpswap.Pool, bool) {
+	h.mu.Lock()
+	pe, ok := h.pools[addr]
+	h.mu.Unlock()
+	if ok && time.Since(pe.at) < 10*time.Minute {
+		return pe.p, true
+	}
+	if h.Chain == nil {
+		return pe.p, ok
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	datas, err := h.Chain.GetMultipleAccounts(cctx, []string{addr})
+	cancel()
+	if err != nil || len(datas) != 1 || datas[0] == nil {
+		return pe.p, ok
+	}
+	p, err := pumpswap.ParsePool(datas[0])
+	if err != nil {
+		return pe.p, ok
+	}
+	h.mu.Lock()
+	h.pools[addr] = poolEntry{p, time.Now()}
+	h.mu.Unlock()
+	return p, true
 }
 
 // balanceAfter reads the wallet's post-trade balance (tx may need a moment to be
