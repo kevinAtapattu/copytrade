@@ -44,6 +44,7 @@ export type LiveFill = {
 export type LivePosition = {
   id: string; mode: string; wallet: string; mint: string; opened_at: string; closed_at?: string; status: string;
   cost_sol: number; proceeds_sol: number; tokens_held: number; entry_price: number; sol_usd: number;
+  mark_pnl_usd?: number; // open only: result if sold now, after fees
 };
 export type Point = { date: string; pnl: number; cum: number };
 export type Rotation = { id: number; wallet: string; from_status: string; to_status: string; reason: string; at: string };

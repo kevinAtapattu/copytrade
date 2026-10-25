@@ -289,3 +289,39 @@ func TestLiveTransportErrorWaitsForExpiryBeforeRetry(t *testing.T) {
 		t.Fatalf("builds %d, blockhash checks %d", builds.Load(), validChecks.Load())
 	}
 }
+
+// Take profit: sell half now, then the wallet's own full exit sells the rest.
+func TestManualSellTakesProfitThenCopyFinishes(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	ctx := context.Background()
+	ex.HandleTrade(ctx, trd("l1", "LIVE", "M1", "buy", 32, 0, true, 1e6, 1e6))
+	ex.HandleTrade(ctx, trd("px", "OTHER", "M1", "buy", 60, time.Minute, false, 1e6, 1e6)) // price up
+	ps, _ := st.ListLivePositions(ctx, store.LiveFilter{})
+	bought := ps[0].TokensHeld
+	if err := ex.ManualSell(ctx, ps[0].ID, 50, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ = st.ListLivePositions(ctx, store.LiveFilter{})
+	if ps[0].Status != model.PosOpen || ps[0].TokensHeld > bought*0.51 || ps[0].TokensHeld < bought*0.49 || ps[0].ProceedsSol <= 0 {
+		t.Fatalf("after half sell %+v", ps[0])
+	}
+	if f := fills(st); f["sell:filled"] != 1 {
+		t.Fatalf("fills %v", f)
+	}
+	ex.HandleTrade(ctx, trd("l2", "LIVE", "M1", "sell", 60, 3*time.Minute, true, 1e6, 0)) // wallet exits
+	ps, _ = st.ListLivePositions(ctx, store.LiveFilter{})
+	if ps[0].Status != model.PosClosed || ps[0].ProceedsSol <= ps[0].CostSol {
+		t.Fatalf("should close at a profit: %+v", ps[0])
+	}
+	// Nothing left to sell: manual and copy sells are no-ops.
+	if err := ex.ManualSell(ctx, ps[0].ID, 100, t0.Add(4*time.Minute)); err == nil {
+		t.Fatal("sold a closed position")
+	}
+	ex.HandleTrade(ctx, trd("l3", "LIVE", "M1", "sell", 60, 5*time.Minute, true, 1e6, 0))
+	if f := fills(st); f["sell:filled"] != 2 {
+		t.Fatalf("fills %v", f)
+	}
+	if err := ex.ManualSell(ctx, ps[0].ID, 150, t0); err == nil {
+		t.Fatal("accepted 150%")
+	}
+}

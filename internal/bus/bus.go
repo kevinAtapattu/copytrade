@@ -12,6 +12,8 @@ import (
 const (
 	StreamTrades = "trades" // every trade (model.Trade, IsTarget set for tracked wallets)
 	StreamEvents = "events" // model.Event notifications for UI + alerts
+	// StreamCommands carries manual actions from the dashboard (model.Command).
+	StreamCommands = "commands"
 )
 
 type Handler func(ctx context.Context, payload []byte) error

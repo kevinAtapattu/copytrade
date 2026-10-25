@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -298,6 +299,42 @@ func (e *Executor) sell(ctx context.Context, p *model.LivePosition, pct float64,
 	}
 	snap := *p
 	e.recordLocked(ctx, f, &snap)
+}
+
+// ManualSell sells pct of an open position now, at the market, when you ask from
+// the dashboard (taking profit before the wallet sells). Later copy sells size
+// off what is left, so after a half sell the wallet's next 50% sell sells half
+// of the remaining half. A full manual sell blocks copy sells while it runs,
+// like a stop-loss.
+func (e *Executor) ManualSell(ctx context.Context, id string, pct float64, now time.Time) error {
+	if pct <= 0 || pct > 100 {
+		return fmt.Errorf("sell percent %v is out of range", pct)
+	}
+	e.mu.Lock()
+	var pos *model.LivePosition
+	var k string
+	for key, p := range e.positions {
+		if p.ID == id {
+			pos, k = p, key
+			break
+		}
+	}
+	switch {
+	case pos == nil:
+		e.mu.Unlock()
+		return errors.New("position is not open")
+	case e.stopping[k]:
+		e.mu.Unlock()
+		return errors.New("a full sell of this position is already running")
+	}
+	if pct >= 99.9 {
+		e.stopping[k] = true
+	}
+	e.mu.Unlock()
+	t := model.Trade{Signature: fmt.Sprintf("manual:%s:%d", id, now.UnixNano()), Mint: pos.Mint, Trader: pos.Wallet,
+		Side: model.SideSell, ReceivedAt: now}
+	e.run(k, func() { e.sell(ctx, pos, pct, "manual", t) })
+	return nil
 }
 
 func (e *Executor) reject(ctx context.Context, t model.Trade, reason string) {

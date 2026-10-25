@@ -67,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/health", s.health)
 	m.HandleFunc("GET /api/executor", s.executor)
 	m.HandleFunc("POST /api/executor/kill", s.kill)
+	m.HandleFunc("POST /api/executor/positions/{id}/sell", s.sellPosition)
 	m.HandleFunc("GET /api/stream", s.stream)
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return cors(m)
@@ -667,6 +668,24 @@ func (s *Server) executor(w http.ResponseWriter, r *http.Request) {
 	}
 	s.attachSim(ctx, fills)
 	pos, _ := s.Store.ListLivePositions(ctx, store.LiveFilter{Mode: view, Since: now.AddDate(0, 0, -30)})
+	// What each open position would sell for now, after fees: the number to judge
+	// a "Sell now" by.
+	fees := sim.FeesFrom(s.Cfg)
+	toks := s.tokenCache(ctx)
+	rows := make([]execPos, len(pos))
+	for i, p := range pos {
+		rows[i].LivePosition = p
+		if p.Status != model.PosOpen {
+			continue
+		}
+		if tok := toks(p.Mint); tok != nil && p.TokensHeld > 0 {
+			st := curve.State{VSol: tok.VSol, VTokens: tok.VTokens, AMM: tok.Pool == model.PoolPumpSwap}
+			if f, err := curve.Sell(st, p.TokensHeld, fees); err == nil {
+				v := (p.ProceedsSol + max(f.SolAmount, 0) - p.CostSol) * p.SolUSD
+				rows[i].MarkPnlUSD = &v
+			}
+		}
+	}
 	day := now.UTC().Truncate(24 * time.Hour)
 	var dayPnl, gapSum float64
 	gapN := 0
@@ -691,7 +710,7 @@ func (s *Server) executor(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		// mode: what the executor is running now; view: which results this response shows
-		"mode": s.runMode(), "view": view, "kill_switch": kill == "on", "fills": fills, "positions": pos,
+		"mode": s.runMode(), "view": view, "kill_switch": kill == "on", "fills": fills, "positions": rows,
 		"day_realized_usd": dayPnl, "daily_loss_limit_usd": s.Cfg.DailyLossLimitUSD,
 		"max_open_positions": s.Cfg.MaxOpenPositions, "stop_loss_pct": s.Cfg.StopLossPct, "size_usd": s.Cfg.ExecSizeUSD,
 		// positive = worse than simulated
@@ -756,6 +775,53 @@ func (s *Server) kill(w http.ResponseWriter, r *http.Request) {
 	_ = bus.PublishJSON(r.Context(), s.Bus, bus.StreamEvents, model.Event{Kind: "info", At: s.Now(), Service: "api",
 		Message: "kill switch " + v})
 	writeJSON(w, 200, map[string]any{"ok": true, "kill_switch": body.On})
+}
+
+type execPos struct {
+	model.LivePosition
+	MarkPnlUSD *float64 `json:"mark_pnl_usd,omitempty"` // open only: PnL if sold now
+}
+
+// sellPosition asks the executor to sell part or all of an open position now.
+// The API never trades; the executor does the sell through its normal path
+// (paper or live, whichever it runs in).
+func (s *Server) sellPosition(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var body struct {
+		Pct float64 `json:"pct"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	if body.Pct <= 0 || body.Pct > 100 {
+		fail(w, 400, fmt.Errorf("pct must be between 0 and 100"))
+		return
+	}
+	id := r.PathValue("id")
+	open, err := s.Store.ListLivePositions(ctx, store.LiveFilter{OpenOnly: true})
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	var pos *model.LivePosition
+	for i := range open {
+		if open[i].ID == id {
+			pos = &open[i]
+		}
+	}
+	if pos == nil {
+		fail(w, 404, fmt.Errorf("no open position %s", id))
+		return
+	}
+	c := model.Command{Kind: model.CmdSellPosition, PositionID: id, Pct: body.Pct, At: s.Now()}
+	if err := bus.PublishJSON(ctx, s.Bus, bus.StreamCommands, c); err != nil {
+		fail(w, 500, err)
+		return
+	}
+	_ = bus.PublishJSON(ctx, s.Bus, bus.StreamEvents, model.Event{Kind: "info", At: s.Now(), Service: "api",
+		Message: fmt.Sprintf("sell now requested: %.0f%% of %s (%s)", body.Pct, pos.Mint, pos.Mode)})
+	writeJSON(w, 202, map[string]any{"ok": true})
 }
 
 // ---- SSE

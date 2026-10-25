@@ -19,6 +19,18 @@ export default function ExecutorPage() {
   const [busy, setBusy] = useState(false);
   const { names } = useWalletNames();
   const open = (data?.positions ?? []).filter((p) => p.status === "open");
+  const [selling, setSelling] = useState("");
+  const sellNow = async (p: LivePosition, pct: number) => {
+    const now = p.mark_pnl_usd != null ? ` It would close at about ${usd(p.mark_pnl_usd, true)} right now.` : "";
+    const what = pct >= 100 ? "Sell all of this position now" : "Sell half of this position now";
+    const real = p.mode === "live" ? " This is a real trade with real money." : "";
+    if (!confirm(`${what} (${short(p.mint)}, copying ${names.get(p.wallet) ?? short(p.wallet)}), at the market price?${now}${real}`)) return;
+    setSelling(p.id);
+    try {
+      await apiSend(`executor/positions/${p.id}/sell`, "POST", { pct });
+      setTimeout(reload, 2000);
+    } finally { setTimeout(() => setSelling(""), 2000); }
+  };
   const toggle = async () => {
     if (!data) return;
     if (!data.kill_switch && !confirm("Stop all new buys? Sells of open positions still go through.")) return;
@@ -62,8 +74,16 @@ export default function ExecutorPage() {
           { key: "t", label: "Token", render: (p) => <span className="mono">{short(p.mint)}</span> },
           { key: "s", label: "Status", render: (p) => p.status },
           { key: "c", label: "Cost", num: true, render: (p) => sol(p.cost_sol) },
+          { key: "n", label: "Now", num: true, help: "What the position would make if sold right now, after fees and price impact.",
+            sort: (p) => p.mark_pnl_usd ?? 0,
+            render: (p) => p.status !== "open" || p.mark_pnl_usd == null ? "-" : <span className={pnlClass(p.mark_pnl_usd)}>{usd(p.mark_pnl_usd, true)}</span> },
           { key: "r", label: "Realized", num: true, render: (p) => p.status === "open" ? "-" :
             <span className={pnlClass(p.proceeds_sol - p.cost_sol)}>{usd((p.proceeds_sol - p.cost_sol) * p.sol_usd, true)}</span> },
+          { key: "a", label: "", render: (p) => p.status !== "open" ? null : (
+            <span className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
+              <button className="btn small" disabled={selling === p.id} title="Take profit on half; the rest keeps following the wallet" onClick={() => sellNow(p, 50)}>Sell half</button>
+              <button className="btn small primary" disabled={selling === p.id} title="Close the position now instead of waiting for the wallet to sell" onClick={() => sellNow(p, 100)}>{selling === p.id ? "Selling..." : "Sell all"}</button>
+            </span>) },
         ]} />
       </div>
       <div className="card" style={{ marginTop: 14 }}>

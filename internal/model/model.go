@@ -232,6 +232,17 @@ type LivePosition struct {
 	SolUSD      float64    `json:"sol_usd"`
 }
 
+// Command is a manual action from the dashboard, on the commands stream.
+type Command struct {
+	Kind       string    `json:"kind"` // CmdSellPosition
+	PositionID string    `json:"position_id"`
+	Pct        float64   `json:"pct"` // share of what is held, 0-100
+	At         time.Time `json:"at"`
+}
+
+// CmdSellPosition asks the executor to sell part or all of an open position now.
+const CmdSellPosition = "sell_position"
+
 // Event is a notification on the events stream (UI + alerts).
 type Event struct {
 	Kind    string    `json:"kind"` // target_trade | sim_fill | live_fill | rotation | discovery | error | info

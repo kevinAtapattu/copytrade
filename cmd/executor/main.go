@@ -46,6 +46,27 @@ func main() {
 			}
 		}
 	}()
+	// Manual sells from the dashboard. A request older than a minute (say, replayed
+	// after a restart) is ignored: the price it was asked at is gone.
+	go func() {
+		err := a.Bus.Subscribe(a.Ctx, bus.StreamCommands, "executor", "exec-1", func(ctx context.Context, b []byte) error {
+			var c model.Command
+			if err := json.Unmarshal(b, &c); err != nil || c.Kind != model.CmdSellPosition {
+				return nil
+			}
+			if time.Since(c.At) > time.Minute {
+				slog.Warn("ignoring stale sell request", "position", c.PositionID, "asked_at", c.At)
+				return nil
+			}
+			if err := ex.ManualSell(ctx, c.PositionID, c.Pct, time.Now()); err != nil {
+				app.Emit(ctx, a.Bus, "executor", "error", "sell now failed: "+err.Error(), nil)
+			}
+			return nil
+		})
+		if err != nil && a.Ctx.Err() == nil {
+			slog.Error("subscribe commands", "err", err)
+		}
+	}()
 	a.Heartbeat(10*time.Second, func() any {
 		lag, _ := a.Redis.Lag(context.Background(), bus.StreamTrades, "executor")
 		return map[string]any{"mode": trader.Mode(), "open_positions": ex.OpenCount(), "stream_lag": lag}
