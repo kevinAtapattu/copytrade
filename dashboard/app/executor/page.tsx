@@ -1,7 +1,8 @@
 "use client";
 import { useState } from "react";
-import { Err, Seg, Stat, Table } from "@/components/ui";
-import { LiveFill, LivePosition, apiSend, useApi } from "@/lib/api";
+import { Err, Seg, Stat, Table, WalletName } from "@/components/ui";
+import { LiveFill, LivePosition, apiSend, useApi, useWalletNames } from "@/lib/api";
+import { help } from "@/lib/glossary";
 import { num, pnlClass, price, short, sol, time, usd } from "@/lib/format";
 
 type Exec = {
@@ -16,10 +17,11 @@ export default function ExecutorPage() {
   const { data, error, reload } = useApi<Exec>(`executor${view ? `?mode=${view}` : ""}`, 5000);
   const shown = (view || data?.view || "paper") as "paper" | "live";
   const [busy, setBusy] = useState(false);
+  const { names } = useWalletNames();
   const open = (data?.positions ?? []).filter((p) => p.status === "open");
   const toggle = async () => {
     if (!data) return;
-    if (!data.kill_switch && !confirm("Stop all new copy buys? Exits still run.")) return;
+    if (!data.kill_switch && !confirm("Stop all new buys? Sells of open positions still go through.")) return;
     setBusy(true);
     try { await apiSend("executor/kill", "POST", { on: !data.kill_switch }); await reload(); } finally { setBusy(false); }
   };
@@ -27,30 +29,36 @@ export default function ExecutorPage() {
     <>
       <div className="page-head">
         <div>
-          <h2>Executor</h2>
-          <div className="sub">Copies live wallets only. Mode is set by LIVE_TRADING in .env; PAPER fills use the live curve with no transaction sent.</div>
+          <h2>Auto-trader</h2>
+          <div className="sub">
+            Copies only the wallets you make live, $25 per trade, with a daily loss limit and a stop-loss.{" "}
+            {data?.mode === "live" ? "It is trading real money." : "It is in paper mode: it prices each trade at the real market but sends nothing. Real trading needs LIVE_TRADING=true in .env."}
+          </div>
         </div>
         <div className="row">
-          <Seg value={shown} onChange={setView} options={[{ v: "paper", label: "Paper results" }, { v: "live", label: "Live results" }]} />
-          <button className={`btn kill ${data?.kill_switch ? "on" : "danger"}`} disabled={busy || !data} onClick={toggle}>
-            {data?.kill_switch ? "KILL SWITCH ON (click to resume)" : "KILL SWITCH"}
+          <Seg value={shown} onChange={setView} options={[{ v: "paper", label: "Paper results", title: help("paper") }, { v: "live", label: "Real results", title: help("live") }]} />
+          <button className={`btn kill ${data?.kill_switch ? "on" : "danger"}`} disabled={busy || !data} onClick={toggle} title={help("killSwitch")}>
+            {busy ? "Working..." : data?.kill_switch ? "Buying stopped: click to resume" : "Stop all buying"}
           </button>
         </div>
       </div>
       <Err error={error} />
       <div className="grid stats">
-        <Stat label="Executor running in" value={data?.mode?.toUpperCase() ?? "-"}
-          hint={`$${data?.size_usd ?? "-"} per trade · showing ${shown} results`} />
-        <Stat label={`Realized today (${shown})`} value={usd(data?.day_realized_usd, true)} tone={data?.day_realized_usd} hint={`limit -${usd(data?.daily_loss_limit_usd)}`} />
-        <Stat label="Open positions" value={`${open.length} / ${data?.max_open_positions ?? "-"}`} hint={`stop-loss ${data?.stop_loss_pct ?? "-"}%`} />
-        <Stat label="Avg gap vs sim" value={`${num(data?.avg_gap_vs_sim_pct, 2)}%`} hint={`${data?.gap_samples ?? 0} fills, positive = worse than simulated`} />
+        <Stat label="Running in" help={help(data?.mode === "live" ? "live" : "paper")} value={data?.mode === "live" ? "Real money" : data ? "Paper" : "-"}
+          hint={`$${data?.size_usd ?? "-"} per trade${data?.kill_switch ? " · buying stopped" : ""}`} />
+        <Stat label={`Closed today (${shown})`} value={usd(data?.day_realized_usd, true)} tone={data?.day_realized_usd}
+          hint={`stops buying for the day at -${usd(data?.daily_loss_limit_usd)}`} />
+        <Stat label="Open positions" value={`${open.length} of ${data?.max_open_positions ?? "-"} max`} hint={`each sold if it falls ${data?.stop_loss_pct ?? "-"}%`} />
+        <Stat label="Real vs paper price" help="How much worse (+) or better (-) the auto-trader's prices were than the paper copies'. Near 0% means the paper results are realistic."
+          value={data?.gap_samples ? `${num(data?.avg_gap_vs_sim_pct, 2)}%` : "-"} hint={data?.gap_samples ? `over ${data.gap_samples} orders` : "no orders yet"} />
       </div>
       <div className="card" style={{ marginTop: 14 }}>
         <h3>Positions</h3>
-        <Table rows={data?.positions ?? []} rowKey={(p) => p.id} initialSort={{ key: "o", desc: true }} empty={`No ${shown} positions`} cols={[
+        <Table rows={data?.positions ?? []} rowKey={(p) => p.id} initialSort={{ key: "o", desc: true }}
+          empty={`No ${shown} positions yet. The auto-trader only copies live wallets; make one live on the Wallets page.`} cols={[
           { key: "o", label: "Opened", sort: (p) => p.opened_at, render: (p) => time(p.opened_at) },
           { key: "m", label: "Mode", render: (p) => <span className="badge">{p.mode}</span> },
-          { key: "w", label: "Wallet", render: (p) => <span className="mono">{short(p.wallet)}</span> },
+          { key: "w", label: "Copying", render: (p) => <WalletName addr={p.wallet} names={names} /> },
           { key: "t", label: "Token", render: (p) => <span className="mono">{short(p.mint)}</span> },
           { key: "s", label: "Status", render: (p) => p.status },
           { key: "c", label: "Cost", num: true, render: (p) => sol(p.cost_sol) },
@@ -59,15 +67,15 @@ export default function ExecutorPage() {
         ]} />
       </div>
       <div className="card" style={{ marginTop: 14 }}>
-        <h3>Fills vs simulation</h3>
-        <Table rows={data?.fills ?? []} rowKey={(f) => f.id} empty={`No ${shown} fills yet`} cols={[
+        <h3>Orders vs paper copies</h3>
+        <Table rows={data?.fills ?? []} rowKey={(f) => f.id} empty={`No ${shown} orders yet`} cols={[
           { key: "t", label: "Sent", render: (f) => time(f.sent_at) },
           { key: "st", label: "Status", render: (f) => <span className={`badge ${f.status === "failed" ? "failed" : ""}`} title={f.error}>{f.status}</span> },
           { key: "side", label: "Side", render: (f) => `${f.side}${f.reason !== "copy" ? ` (${f.reason})` : ""}` },
-          { key: "w", label: "Wallet", render: (f) => <span className="mono">{short(f.wallet)}</span> },
+          { key: "w", label: "Copying", render: (f) => <WalletName addr={f.wallet} names={names} /> },
           { key: "px", label: "Our price", num: true, render: (f) => <span className="mono">{price(f.fill_price)}</span> },
-          { key: "sim", label: "Sim +2s", num: true, render: (f) => <span className="mono">{price(f.sim_fill_price)}</span> },
-          { key: "lat", label: "Latency", num: true, render: (f) => f.filled_at ? `${((new Date(f.filled_at).getTime() - new Date(f.target_at).getTime()) / 1000).toFixed(1)}s` : "-" },
+          { key: "sim", label: "Paper +2s", num: true, render: (f) => <span className="mono">{price(f.sim_fill_price)}</span> },
+          { key: "lat", label: "Delay", help: "Time from their trade to our order landing.", num: true, render: (f) => f.filled_at ? `${((new Date(f.filled_at).getTime() - new Date(f.target_at).getTime()) / 1000).toFixed(1)}s` : "-" },
           { key: "fee", label: "Fees", num: true, render: (f) => sol(f.fees_sol) },
           { key: "err", label: "Error", render: (f) => <span className="muted">{f.error}</span> },
         ]} />

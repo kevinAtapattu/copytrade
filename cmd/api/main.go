@@ -4,6 +4,7 @@ package main
 import (
 	"log/slog"
 	"time"
+	_ "time/tzdata" // ALERT_TZ for the overview's "today" in a slim container
 
 	"copytrade/internal/api"
 	"copytrade/internal/app"

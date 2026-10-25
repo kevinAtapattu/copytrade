@@ -23,7 +23,7 @@ export default function HealthPage() {
   const rows = EXPECTED.map((name) => ({ name, svc: data?.services?.[name] }));
   return (
     <>
-      <div className="page-head"><div><h2>Health</h2><div className="sub">Refreshes every 5s</div></div></div>
+      <div className="page-head"><div><h2>Health</h2><div className="sub">Whether the data feeds and background services are running. Updates every 5 seconds. Mostly for troubleshooting.</div></div></div>
       <Err error={error} />
       <div className="grid stats">
         {helius ? (
@@ -50,7 +50,7 @@ export default function HealthPage() {
         <Stat label={helius ? "Wallet trades today" : "Message budget today"}
           value={helius ? num(data?.messages_today, 0) : guard ? (guard.paused ? "PAUSED" : `${num(guard.messages_today, 0)} / ${num(guard.daily_budget, 0)}`) : "-"}
           tone={guard?.paused ? -1 : undefined}
-          hint={helius ? `no message budget needed (free) · wallets over ${guard?.wallet_max_per_day ?? 1000} trades/day get paused until the next day` :
+          hint={helius ? `free, no per-trade cost · ${Number(ing?.quiet_accounts ?? 0)} noisy wallets on the low-data feed` :
             guard ? (guard.paused ? `budget hit, resumes ${new Date(guard.resumes_at!).toLocaleString()}` : `max ~${num(guard.daily_budget / 10000 * 0.01, 4)} SOL/day · wallets over ${guard.wallet_max_per_day} trades/day get paused`) : ""} />
         <Stat label="RPC calls today (prices)" value={rpcToday != null ? `${num(rpcToday, 0)} / ${num(rpcMax, 0)}` : "-"}
           hint={snap ? `${snap.watched_tokens} tokens priced every mark · ${snap.read_errors} read errors${snap.last_error ? `: ${snap.last_error}` : ""}` : ""} />
@@ -62,12 +62,25 @@ export default function HealthPage() {
           { key: "s", label: "State", render: (r) => !r.svc ? <span className="badge warn">never seen</span>
             : r.svc.stale ? <span className="badge critical">stale</span> : <span className="badge live">ok</span> },
           { key: "u", label: "Heartbeat", render: (r) => ago(r.svc?.updated_at) },
-          { key: "d", label: "Details", render: (r) => <span className="mono muted" style={{ whiteSpace: "normal" }}>{r.svc ? fmt(r.svc.data) : ""}</span> },
+          { key: "d", label: "Details", render: (r) => r.svc ? (
+            <details className="raw"><summary className="muted">{SUMMARY[r.name]?.(r.svc.data) ?? "details"}</summary><span className="mono muted">{fmt(r.svc.data)}</span></details>
+          ) : "" },
         ]} />
       </div>
     </>
   );
 }
+
+// One plain line per service; the raw heartbeat stays one click away.
+const SUMMARY: Record<string, (d: Record<string, unknown>) => string> = {
+  ingest: (d) => `${d.accounts ?? 0} wallets followed, ${num(Number(d.bytes_today ?? 0) / 1e6, 1)} MB today`,
+  simulator: (d) => `${d.open_positions ?? 0} open paper positions, last trade ${ago(String(d.last_trade_at ?? ""))}`,
+  scorer: (d) => `${d.scores ?? 0} scores, last run ${ago(String(d.last_run ?? ""))}`,
+  discovery: (d) => `${num(Number(d.rpc_calls_today ?? 0), 0)} lookups today, last run ${ago(String(d.last_run ?? ""))}`,
+  api: () => "serving this dashboard",
+  executor: (d) => `${d.mode ?? "-"} mode, ${d.open_positions ?? 0} open`,
+  alerter: (d) => `${d.sent ?? 0} alerts sent`,
+};
 
 function fmt(d: Record<string, unknown>) {
   return Object.entries(d || {})

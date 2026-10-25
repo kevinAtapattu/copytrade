@@ -5,6 +5,7 @@ import LineChart, { mergeSeries } from "@/components/LineChart";
 import { Err, Stat, Table } from "@/components/ui";
 import { CompareRow, CompareSummary, Point, Rotation, Score, SimPosition, SimTrade, Trade, Wallet, useApi } from "@/lib/api";
 import { ago, dur, num, pct, pnlClass, price, short, spct, time, usd } from "@/lib/format";
+import { STATUS_HELP, STATUS_LABEL } from "@/lib/glossary";
 
 type Detail = {
   wallet: Wallet; scores: Score[]; score_history: Record<string, Score[]>; equity: Record<string, Point[]>;
@@ -25,20 +26,21 @@ export default function WalletDetail() {
     <>
       <div className="page-head">
         <div>
-          <h2><span className="mono" style={{ fontSize: 16 }}>{address}</span></h2>
+          <h2>{data?.wallet.label || "Wallet"}</h2>
+          <div className="sub mono addr">{address}</div>
           <div className="sub">
-            {data && <><span className={`badge ${data.wallet.status}`}>{data.wallet.status}</span> {data.wallet.label} · {data.wallet.source}: {data.wallet.reason} · last trade {ago(data.wallet.last_trade_at)}</>}
+            {data && <><span className={`badge ${data.wallet.status === "paused" ? "bench" : data.wallet.status}`} title={STATUS_HELP[data.wallet.status]}>{STATUS_LABEL[data.wallet.status] ?? data.wallet.status}</span> found by {data.wallet.source} · last trade {ago(data.wallet.last_trade_at)}</>}
           </div>
         </div>
         <div className="row">
-          <a className="btn" href={`https://solscan.io/account/${address}`} target="_blank">Solscan</a>
-          <Link className="btn" href="/wallets">Back</Link>
+          <a className="btn" href={`https://solscan.io/account/${address}`} target="_blank" rel="noreferrer">Solscan</a>
+          <Link className="btn" href="/wallets">All wallets</Link>
         </div>
       </div>
       <Err error={error} />
       <div className="grid stats">
         {DELAYS.map((d) => (
-          <Stat key={d} label={`14d sim PnL at +${d}s`} value={usd(s(d, 14)?.pnl_usd, true)} tone={s(d, 14)?.pnl_usd}
+          <Stat key={d} label={`Paper PnL, 14 days, +${d}s`} value={usd(s(d, 14)?.pnl_usd, true)} tone={s(d, 14)?.pnl_usd}
             hint={`score ${num(s(d, 14)?.score)} · ex-best ${usd(s(d, 14)?.pnl_ex_best_usd, true)} · DD ${pct(s(d, 14)?.max_drawdown)}`} />
         ))}
         <Stat label="Win rate +2s (14d)" value={pct(s(2, 14)?.win_rate, 0)} hint={`${s(2, 14)?.positions ?? 0} positions, avg hold ${dur(s(2, 14)?.avg_hold_s)}`} />
@@ -63,7 +65,7 @@ export default function WalletDetail() {
         </div>
         <Table rows={data?.compare ?? []} rowKey={(r) => r.mint} empty="No pump.fun trades from this wallet yet" cols={[
           { key: "at", label: "Their buy", sort: (r) => r.first_buy_at, render: (r) => time(r.first_buy_at) },
-          { key: "mint", label: "Token", render: (r) => <a className="mono" href={`https://pump.fun/coin/${r.mint}`} target="_blank">{short(r.mint)}</a> },
+          { key: "mint", label: "Token", render: (r) => <a className="mono" href={`https://pump.fun/coin/${r.mint}`} target="_blank" rel="noreferrer">{short(r.mint)}</a> },
           { key: "in", label: "They spent", num: true, sort: (r) => r.their_sol_in, render: (r) => `${num(r.their_sol_in, 2)} SOL` },
           { key: "them", label: "Them", num: true, sort: (r) => r.their_pct,
             render: (r) => <><b className={pnlClass(r.their_pct)}>{spct(r.their_pct)}</b>{r.their_open && <span className="muted"> holding</span>}</> },
@@ -78,15 +80,15 @@ export default function WalletDetail() {
         ]} initialSort={{ key: "at", desc: true }} />
       </div>
       <div className="card" style={{ marginTop: 14 }}>
-        <h3>Cumulative simulated PnL by delay (30d, USD)</h3>
+        <h3>Paper profit over time, by copy delay (30 days)</h3>
         <LineChart rows={rows} series={DELAYS.map((d) => ({ key: `d${d}`, label: `+${d}s`, color: COLORS[d] }))} />
       </div>
       <div className="card" style={{ marginTop: 14 }}>
-        <h3>Their trades vs our simulated fills</h3>
+        <h3>Their trades and our paper copies</h3>
         <Table rows={data?.trades ?? []} rowKey={(t) => t.signature} empty="No trades seen yet" cols={[
           { key: "at", label: "Time", render: (t) => time(t.received_at) },
           { key: "side", label: "Side", render: (t) => <span className={t.side === "buy" ? "pos" : "neg"}>{t.side}</span> },
-          { key: "mint", label: "Token", render: (t) => <a className="mono" href={`https://pump.fun/coin/${t.mint}`} target="_blank">{short(t.mint)}</a> },
+          { key: "mint", label: "Token", render: (t) => <a className="mono" href={`https://pump.fun/coin/${t.mint}`} target="_blank" rel="noreferrer">{short(t.mint)}</a> },
           { key: "sol", label: "Their SOL", num: true, render: (t) => num(t.sol_amount, 3) },
           { key: "px", label: "Their price", num: true, render: (t) => <span className="mono">{price(t.price)}</span> },
           ...DELAYS.map((d) => ({
@@ -103,13 +105,13 @@ export default function WalletDetail() {
               );
             },
           })),
-          { key: "sig", label: "Tx", render: (t) => <a className="mono muted" href={`https://solscan.io/tx/${t.signature}`} target="_blank">{short(t.signature)}</a> },
+          { key: "sig", label: "Tx", render: (t) => <a className="mono muted" href={`https://solscan.io/tx/${t.signature}`} target="_blank" rel="noreferrer">{short(t.signature)}</a> },
         ]} />
         <div className="sub" style={{ marginTop: 8 }}>Percent = how much worse our all-in price was than theirs (fees + delay + slippage).</div>
       </div>
       <div className="grid two" style={{ marginTop: 14 }}>
         <div className="card">
-          <h3>Simulated positions (30d)</h3>
+          <h3>Our paper positions (30 days)</h3>
           <Table rows={data?.positions ?? []} rowKey={(p) => p.id} initialSort={{ key: "opened", desc: true }} cols={[
             { key: "d", label: "Delay", sort: (p) => p.delay_s, render: (p) => `+${p.delay_s}s` },
             { key: "mint", label: "Token", render: (p) => <span className="mono">{short(p.mint)}</span> },
@@ -124,7 +126,7 @@ export default function WalletDetail() {
           <h3>Status history</h3>
           <Table rows={data?.rotations ?? []} rowKey={(r) => String(r.id)} empty="No status changes" cols={[
             { key: "at", label: "When", render: (r) => time(r.at) },
-            { key: "ch", label: "Change", render: (r) => `${r.from_status} -> ${r.to_status}` },
+            { key: "ch", label: "Change", render: (r) => `${STATUS_LABEL[r.from_status] ?? r.from_status} to ${STATUS_LABEL[r.to_status] ?? r.to_status}` },
             { key: "why", label: "Reason", render: (r) => <span className="muted">{r.reason}</span> },
           ]} />
         </div>

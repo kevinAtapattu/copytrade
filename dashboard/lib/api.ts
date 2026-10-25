@@ -116,3 +116,9 @@ export function useApi<T>(path: string | null, refreshMs = 15000) {
   }, [load, refreshMs]);
   return { data, error, loading, reload: load };
 }
+
+// useWalletNames: address -> label for every wallet (refreshed each minute).
+export function useWalletNames() {
+  const { data } = useApi<Wallet[]>("wallets?dropped=1", 60000);
+  return { names: new Map((data ?? []).filter((w) => w.label).map((w) => [w.address, w.label])), wallets: data ?? [] };
+}

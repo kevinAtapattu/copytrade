@@ -150,6 +150,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	toks := s.tokenCache(ctx)
 	var outs []score.Outcome
 	var open []openPos
+	openPnl, openCost := 0.0, 0.0
 	for _, p := range ps {
 		if !inScope[p.Wallet] {
 			continue
@@ -158,6 +159,8 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		o := score.Value(p, tok, fees, now)
 		outs = append(outs, o)
 		if p.Status == model.PosOpen {
+			openPnl += o.PnlUSD
+			openCost += p.CostSol * p.SolUSD
 			op := openPos{SimPosition: p, MarkPnlUSD: o.PnlUSD}
 			if tok != nil {
 				op.LastPrice = tok.LastPrice
@@ -165,7 +168,13 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			open = append(open, op)
 		}
 	}
-	day := now.Truncate(24 * time.Hour)
+	// "Today" is the local day (ALERT_TZ), matching the Discord summaries.
+	loc, err := time.LoadLocation(s.Cfg.AlertTZ)
+	if err != nil {
+		loc = time.UTC
+	}
+	ln := now.In(loc)
+	day := time.Date(ln.Year(), ln.Month(), ln.Day(), 0, 0, 0, 0, loc)
 	sum := func(since time.Time) float64 {
 		t := 0.0
 		for _, o := range outs {
@@ -174,6 +183,17 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return t
+	}
+	// Closed today only (open positions are reported separately as open_pnl).
+	dayClosed, dayN, dayWon := 0.0, 0, 0
+	for _, o := range outs {
+		if o.Closed && !o.At.Before(day) {
+			dayClosed += o.PnlUSD
+			dayN++
+			if o.PnlUSD > 0 {
+				dayWon++
+			}
+		}
 	}
 	execMode := s.viewMode(r)
 	live, _ := s.Store.ListLivePositions(ctx, store.LiveFilter{Mode: execMode, Since: now.AddDate(0, 0, -90)})
@@ -184,6 +204,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"delay": delay, "scope": scope, "wallet_counts": counts, "bankroll_usd": s.Cfg.BankrollUSD,
 		"pnl":            map[string]float64{"day": sum(day), "week": sum(now.AddDate(0, 0, -7)), "month": sum(now.AddDate(0, -1, 0)), "all": sum(time.Time{})},
+		"today":          map[string]any{"closed_usd": dayClosed, "closed": dayN, "won": dayWon, "open_usd": openPnl, "open_cost_usd": openCost, "open": len(open), "tz": loc.String()},
 		"equity":         dailySeries(outs),
 		"exec_equity":    dailySeries(execOuts),
 		"open_positions": open,
