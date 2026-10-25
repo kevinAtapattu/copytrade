@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mr-tron/base58"
 
 	"copytrade/internal/curve"
 	"copytrade/internal/history"
@@ -310,6 +311,29 @@ func TestHeliusDecodesPumpSwapSell(t *testing.T) {
 	// Someone else's PumpSwap trade in the same tx is not ours.
 	if other := h.convert(context.Background(), note{wallet: hWallet, sig: fx.Sell.Signature, logs: fx.Sell.Logs, at: time.Now()}); len(other) != 0 {
 		t.Fatalf("attributed to the wrong wallet: %+v", other)
+	}
+}
+
+// Multi-pool routes (token -> USDC -> SOL) emit an event on a USDC/SOL pool too;
+// only a graduated token's own pool counts as a trade.
+func TestPumpSwapIgnoresNonCanonicalPool(t *testing.T) {
+	raw, _ := os.ReadFile("../pumpswap/testdata/mainnet.json")
+	var fx struct {
+		Sell struct {
+			Signature string   `json:"signature"`
+			Logs      []string `json:"logs"`
+		} `json:"sell"`
+		PoolB64 string `json:"pool_b64"`
+	}
+	_ = json.Unmarshal(raw, &fx)
+	poolData, _ := base64.StdEncoding.DecodeString(fx.PoolB64)
+	usdc, _ := base58.Decode("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+	copy(poolData[43:75], usdc)
+	h := NewHelius("", fakeChain{after: map[string]float64{fx.Sell.Signature: 0},
+		accounts: map[string][]byte{"4xMCDt7EuE1HDA6h4AF2F9xQWSBk1BXduj3y7eukkVby": poolData}}, 0)
+	got := h.convert(context.Background(), note{wallet: "FzVQSzj8JJr6WMGqbUHzx2XH1KkrfxRrRPv6WcbbZmND", sig: fx.Sell.Signature, logs: fx.Sell.Logs, at: time.Now()})
+	if len(got) != 0 {
+		t.Fatalf("routing hop recorded as a trade: %+v", got)
 	}
 }
 

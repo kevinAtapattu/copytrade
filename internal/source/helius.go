@@ -547,14 +547,20 @@ func (h *Helius) convertQuiet(ctx context.Context, n note) []model.Trade {
 		if err != nil || tx.Failed || !mentionsTrade(tx.Logs) {
 			continue // a SOL transfer, another DEX, or a lookup error
 		}
-		ts := tradesFromEvents(sig, n.wallet, history.EventsFromTx(tx), n.at)
-		ts = append(ts, h.ammTrades(ctx, sig, n.wallet, pumpswap.EventsFromTx(tx), n.at)...)
+		ts := h.TradesFromTx(ctx, sig, n.wallet, tx, n.at)
 		for i := range ts {
 			ts[i].NewTokenBalance = h.balanceAfter(ctx, ts[i])
 		}
 		trades = append(trades, ts...)
 	}
 	return trades
+}
+
+// TradesFromTx decodes the wallet's pump.fun and PumpSwap trades from a fetched
+// transaction, without balances (callers fill NewTokenBalance).
+func (h *Helius) TradesFromTx(ctx context.Context, sig, wallet string, tx solana.TxEvents, at time.Time) []model.Trade {
+	ts := tradesFromEvents(sig, wallet, history.EventsFromTx(tx), at)
+	return append(ts, h.ammTrades(ctx, sig, wallet, pumpswap.EventsFromTx(tx), at)...)
 }
 
 // ammTrades turns the wallet's PumpSwap events into trades on pool "pumpswap"
@@ -572,6 +578,11 @@ func (h *Helius) ammTrades(ctx context.Context, sig, wallet string, evs []pumpsw
 		p, ok := h.pool(ctx, e.Pool)
 		if !ok {
 			h.setErr("pumpswap pool lookup failed; dropped a trade")
+			continue
+		}
+		if canon, err := pumpswap.DerivePool(p.BaseMint); p.SOLQuoted() && (err != nil || canon != e.Pool) {
+			// Not a graduated token's own pool: usually a routing hop (USDC/SOL) in
+			// a multi-pool swap, which is not a trade of the token we care about.
 			continue
 		}
 		st := e.After(p.VirtualQuote)
