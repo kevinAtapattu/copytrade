@@ -5,12 +5,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"copytrade/internal/app"
+	"copytrade/internal/bus"
 	"copytrade/internal/ingest"
 	"copytrade/internal/model"
 	"copytrade/internal/snapshot"
@@ -38,11 +41,22 @@ func main() {
 	}
 	in := ingest.New(src, a.Store, a.Bus, a.Cfg.TokenUnsubCooldown, a.Cfg.TokenMaxWatch)
 	if h, ok := src.(*source.Helius); ok {
+		// Wallets other bots spam stay tracked on the quiet feed, remembered across restarts.
 		h.WalletDailyMB = a.Cfg.HeliusWalletDailyMB
+		if v, ok, _ := a.Store.GetSetting(a.Ctx, source.KeyQuietWallets); ok {
+			var ws []string
+			_ = json.Unmarshal([]byte(v), &ws)
+			h.SetQuiet(ws)
+		}
 		h.OnNoisy = func(w string, mb float64) {
 			ctx, cancel := context.WithTimeout(a.Ctx, 10*time.Second)
 			defer cancel()
-			in.PauseNoisy(ctx, w, mb, a.Cfg.HeliusWalletDailyMB, time.Now())
+			b, _ := json.Marshal(h.Quiet())
+			if err := a.Store.SetSetting(ctx, source.KeyQuietWallets, string(b)); err != nil {
+				slog.Warn("save quiet wallets", "err", err)
+			}
+			msg := fmt.Sprintf("%s: other bots mention this wallet in too many txs (%.0f MB today); still tracked on the low-data feed", w, mb)
+			_ = bus.PublishJSON(ctx, a.Bus, bus.StreamEvents, model.Event{Kind: "info", At: time.Now(), Service: "ingest", Message: msg})
 		}
 	}
 	if a.Cfg.DiscoverySeedMigrations {
@@ -59,9 +73,12 @@ func main() {
 	}
 	in.Guard = ingest.Guard{DailyBudget: a.Cfg.MsgDailyBudget, WalletMaxPerDay: a.Cfg.WalletMaxPerDay}
 	if helius {
-		// Helius bills by data volume (capped by HELIUS_WS_DAILY_MB), not per message,
-		// and PumpPortal carries no paid streams, so the message budget is off.
+		// Helius bills by data volume (capped by HELIUS_WS_DAILY_MB and the per-wallet
+		// quiet feed), not per message, and PumpPortal carries no paid streams, so the
+		// message budget and the per-wallet trade limit are off: every wallet stays tracked.
 		in.Guard.DailyBudget = 0
+		in.Guard.WalletMaxPerDay = 0
+		in.TrackPaused = true
 		go func() {
 			if err := pp.Run(a.Ctx, func(model.Trade) {}); err != nil && a.Ctx.Err() == nil {
 				slog.Warn("pumpportal (migrations) stopped", "err", err)
@@ -126,6 +143,7 @@ func main() {
 			"last_message_at":      s.LastMessageAt,
 			"last_error":           s.LastError,
 			"accounts":             s.Accounts,
+			"quiet_accounts":       s.Quiet,
 			"tokens":               s.Tokens,
 			"messages":             s.Messages,
 			"migrations":           ps.Migrations,

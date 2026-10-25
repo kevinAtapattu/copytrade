@@ -121,7 +121,7 @@ func Load() Config {
 		MsgDailyBudget:      int64(integer("MSG_DAILY_BUDGET", 1000)),
 		WalletSource:        str("WALLET_SOURCE", "helius"),
 		HeliusWSURL:         str("HELIUS_WS_URL", ""),
-		HeliusWSDailyMB:     flt("HELIUS_WS_DAILY_MB", 150),
+		HeliusWSDailyMB:     flt("HELIUS_WS_DAILY_MB", 300),
 		HeliusWalletDailyMB: flt("HELIUS_WALLET_DAILY_MB", 10),
 		WalletMaxPerDay:     integer("WALLET_MAX_TRADES_PER_DAY", 1000),
 
@@ -153,7 +153,7 @@ func Load() Config {
 		DiscoveryMinHits:        integer("DISCOVERY_MIN_HITS", 2),
 		DiscoveryMaxPages:       integer("DISCOVERY_MAX_PAGES", 15),
 		DiscoveryMaxTx:          integer("DISCOVERY_MAX_TX", 400),
-		DiscoveryRPCDailyMax:    int64(integer("DISCOVERY_RPC_DAILY_MAX", 5000)),
+		DiscoveryRPCDailyMax:    int64(integer("DISCOVERY_RPC_DAILY_MAX", 15000)),
 		DiscoverySeedMigrations: boolean("DISCOVERY_SEED_MIGRATIONS", true),
 
 		APIAddr: str("API_ADDR", ":8080"),

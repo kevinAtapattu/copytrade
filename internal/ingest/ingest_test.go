@@ -242,3 +242,18 @@ func TestSpamGuardPausesWalletThenResumes(t *testing.T) {
 		t.Fatal("resumed wallet not resubscribed")
 	}
 }
+
+func TestTrackPausedKeepsPausedWalletsCopied(t *testing.T) {
+	in, src, st, pub := setup(t)
+	ctx := context.Background()
+	in.TrackPaused = true
+	st.SetWalletStatus(ctx, "W1", model.StatusPaused, "paused: label only", t0)
+	in.ReloadWallets(ctx)
+	if len(src.unsubA) != 0 {
+		t.Fatalf("paused wallet unsubscribed: %v", src.unsubA)
+	}
+	in.HandleTrade(ctx, tr("p1", "W1", "buy", 100, 0))
+	if len(*pub) != 1 || !(*pub)[0].IsTarget {
+		t.Fatalf("paused wallet's trade must still be copied: %+v", *pub)
+	}
+}

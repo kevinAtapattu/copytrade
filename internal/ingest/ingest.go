@@ -49,6 +49,9 @@ type Ingestor struct {
 	Classify func(context.Context, model.Trade) model.Trade
 	// Now is the clock for wallet reloads (spam-pause expiry). nil = time.Now.
 	Now func() time.Time
+	// TrackPaused keeps paused wallets tracked and copied. Set when the source is
+	// not billed per message (Helius), so a pause is only a label.
+	TrackPaused bool
 
 	mu      sync.Mutex
 	tracked map[string]bool
@@ -85,7 +88,7 @@ func (in *Ingestor) ReloadWallets(ctx context.Context) error {
 	}
 	want := in.resumePaused(ctx, ws, now())
 	for _, w := range ws {
-		if w.Status == model.StatusLive || w.Status == model.StatusBench {
+		if w.Status == model.StatusLive || w.Status == model.StatusBench || in.TrackPaused && w.Status == model.StatusPaused {
 			want[w.Address] = true
 		}
 	}

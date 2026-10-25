@@ -279,6 +279,7 @@ func (r *RPC) GetMultipleAccounts(ctx context.Context, addrs []string) ([][]byte
 
 type SigInfo struct {
 	Signature string `json:"signature"`
+	Slot      uint64 `json:"slot"`
 	BlockTime int64  `json:"blockTime"`
 	Err       any    `json:"err"`
 }

@@ -34,6 +34,7 @@ type Stats struct {
 	LastMessageAt time.Time `json:"last_message_at"`
 	LastError     string    `json:"last_error,omitempty"`
 	Accounts      int       `json:"accounts"`
+	Quiet         int       `json:"quiet_accounts"` // on the low-data balance-change feed
 	Tokens        int       `json:"tokens"`
 	Messages      int64     `json:"messages"`    // metered trade messages received
 	Migrations    int64     `json:"migrations"`  // free migration events received

@@ -5,7 +5,7 @@ import { Col, Err, Seg, Table } from "@/components/ui";
 import { CompareSummary, Score, Wallet, apiSend, useApi } from "@/lib/api";
 import { ago, dur, num, pct, pnlClass, short, spct, usd } from "@/lib/format";
 
-type Row = Wallet & { scores: Record<string, Record<string, Score>>; open_positions: number; compare?: CompareSummary; trades_24h: number };
+type Row = Wallet & { scores: Record<string, Record<string, Score>>; open_positions: number; compare?: CompareSummary; trades_24h: number; quiet?: boolean };
 
 export default function WalletsPage() {
   const [delay, setDelay] = useState(2);
@@ -33,7 +33,10 @@ export default function WalletsPage() {
   const cols: Col<Row>[] = [
     { key: "rank", label: "#", num: true, render: (r) => <span className="muted">{rankOf.get(r.address) ?? ""}</span> },
     { key: "status", label: "Status", sort: (r) => (r.status === "live" ? 0 : r.status === "bench" ? 1 : 2),
-      render: (r) => <span className={`badge ${r.status}`} title={r.reason}>{r.status === "paused" ? "paused (spam)" : r.status}</span> },
+      render: (r) => <>
+        <span className={`badge ${r.status}`} title={r.reason}>{r.status === "paused" ? "paused (still tracked)" : r.status}</span>
+        {r.quiet && <> <span className="badge" title="Other bots mention this wallet in thousands of txs a minute, so it is tracked on a low-data feed (its own balance changes only). Trades still copied, about 1s slower.">low-data feed</span></>}
+      </> },
     { key: "wallet", label: "Wallet", render: (r) => (
       <Link href={`/wallets/${r.address}`}><span className="mono">{short(r.address)}</span> {r.label && <span className="muted">{r.label}</span>}</Link>
     ) },

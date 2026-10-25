@@ -58,7 +58,11 @@ func TestTradesFromLogs(t *testing.T) {
 	}
 }
 
-type fakeChain struct{ after map[string]float64 }
+type fakeChain struct {
+	after map[string]float64
+	sigs  []solana.SigInfo
+	txs   map[string]solana.TxEvents
+}
 
 func (f fakeChain) GetBalanceChange(_ context.Context, sig, owner, mint string) (solana.BalanceChange, error) {
 	v, ok := f.after[sig]
@@ -67,8 +71,15 @@ func (f fakeChain) GetBalanceChange(_ context.Context, sig, owner, mint string) 
 	}
 	return solana.BalanceChange{TokenAfter: v}, nil
 }
-func (f fakeChain) GetTxEvents(context.Context, string) (solana.TxEvents, error) {
-	return solana.TxEvents{}, errors.New("unused")
+func (f fakeChain) GetTxEvents(_ context.Context, sig string) (solana.TxEvents, error) {
+	tx, ok := f.txs[sig]
+	if !ok {
+		return solana.TxEvents{}, errors.New("not found")
+	}
+	return tx, nil
+}
+func (f fakeChain) GetSignaturesForAddress(context.Context, string, string, int) ([]solana.SigInfo, error) {
+	return f.sigs, nil
 }
 
 func TestHeliusStreamsWalletTrades(t *testing.T) {
@@ -143,10 +154,9 @@ func sellFraction(t model.Trade) float64 {
 	return t.TokenAmount / before
 }
 
-func TestHeliusUnsubscribesNoisyWallet(t *testing.T) {
+func TestHeliusMovesNoisyWalletToQuietFeed(t *testing.T) {
 	up := websocket.Upgrader{}
-	subscribed := make(chan struct{}, 1)
-	unsubscribed := make(chan struct{}, 1)
+	reqs := make(chan string, 8)
 	var mu sync.Mutex
 	var conn *websocket.Conn
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +164,9 @@ func TestHeliusUnsubscribesNoisyWallet(t *testing.T) {
 		if err != nil {
 			return
 		}
+		mu.Lock()
+		conn = c
+		mu.Unlock()
 		for {
 			var req struct {
 				ID     int    `json:"id"`
@@ -162,50 +175,83 @@ func TestHeliusUnsubscribesNoisyWallet(t *testing.T) {
 			if c.ReadJSON(&req) != nil {
 				return
 			}
+			mu.Lock()
 			switch req.Method {
 			case "logsSubscribe":
-				mu.Lock()
-				conn = c
 				c.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": 77})
-				mu.Unlock()
-				subscribed <- struct{}{}
-			case "logsUnsubscribe":
-				unsubscribed <- struct{}{}
+			case "accountSubscribe":
+				c.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": 88})
 			}
+			mu.Unlock()
+			reqs <- req.Method
 		}
 	}))
 	defer srv.Close()
 
-	h := NewHelius("ws"+strings.TrimPrefix(srv.URL, "http"), fakeChain{}, 0)
+	buy := history.Event{Mint: hMint, User: hWallet, IsBuy: true, SolAmount: 1.5, TokenAmount: 40e6, VSol: 40, VTokens: 800e6}
+	chain := fakeChain{
+		after: map[string]float64{"BUY": 40e6},
+		sigs: []solana.SigInfo{
+			{Signature: "BOT", Slot: 5, Err: map[string]any{"InstructionError": 1}}, // other bots' failed txs
+			{Signature: "BUY", Slot: 5},
+			{Signature: "OLD", Slot: 4},
+		},
+		txs: map[string]solana.TxEvents{"BUY": {Signature: "BUY", Logs: pumpLogs(buy)},
+			"OLD": {Signature: "OLD", Logs: pumpLogs(buy)}},
+	}
+	h := NewHelius("ws"+strings.TrimPrefix(srv.URL, "http"), chain, 0)
 	h.WalletDailyMB = 0.001 // 1 KB
 	noisy := make(chan string, 1)
 	h.OnNoisy = func(w string, mb float64) { noisy <- w }
 	h.SubscribeAccounts([]string{hWallet})
+	got := make(chan model.Trade, 4)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	go h.Run(ctx, func(model.Trade) {})
-	<-subscribed
+	go h.Run(ctx, func(tr model.Trade) { got <- tr })
+	expect := func(method string) {
+		t.Helper()
+		select {
+		case m := <-reqs:
+			if m != method {
+				t.Fatalf("request %s, want %s", m, method)
+			}
+		case <-ctx.Done():
+			t.Fatalf("no %s", method)
+		}
+	}
+	notify := func(v any) {
+		mu.Lock()
+		defer mu.Unlock()
+		conn.WriteJSON(v)
+	}
+	expect("logsSubscribe")
 	junk := strings.Repeat("Program BevFQ2 failed ", 30)
 	for i := 0; i < 3; i++ {
-		mu.Lock()
-		conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "method": "logsNotification", "params": map[string]any{
+		notify(map[string]any{"jsonrpc": "2.0", "method": "logsNotification", "params": map[string]any{
 			"subscription": 77, "result": map[string]any{"value": map[string]any{"signature": "S", "err": "x", "logs": []string{junk}}}}})
-		mu.Unlock()
 	}
+	if w := <-noisy; w != hWallet {
+		t.Fatalf("noisy %s", w)
+	}
+	expect("logsUnsubscribe")
+	expect("accountSubscribe")
+	if st := h.Stats(); st.Accounts != 1 || st.Quiet != 1 {
+		t.Fatalf("wallet must stay tracked on the quiet feed: %+v", st)
+	}
+	// The wallet's balance changed in slot 5: only its own successful tx there counts.
+	notify(map[string]any{"jsonrpc": "2.0", "method": "accountNotification", "params": map[string]any{
+		"subscription": 88, "result": map[string]any{"context": map[string]any{"slot": 5}, "value": map[string]any{"lamports": 1}}}})
 	select {
-	case w := <-noisy:
-		if w != hWallet {
-			t.Fatalf("noisy %s", w)
+	case tr := <-got:
+		if tr.Signature != "BUY" || tr.Side != model.SideBuy || tr.NewTokenBalance != 40e6 {
+			t.Fatalf("quiet trade %+v", tr)
 		}
 	case <-ctx.Done():
-		t.Fatal("noisy wallet not reported")
+		t.Fatal("quiet feed trade not delivered")
 	}
 	select {
-	case <-unsubscribed:
-	case <-ctx.Done():
-		t.Fatal("noisy wallet not unsubscribed")
-	}
-	if st := h.Stats(); st.Accounts != 0 {
-		t.Fatalf("still tracking %d accounts", st.Accounts)
+	case tr := <-got:
+		t.Fatalf("unexpected trade %+v", tr)
+	case <-time.After(200 * time.Millisecond):
 	}
 }

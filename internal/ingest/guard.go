@@ -160,23 +160,6 @@ func (in *Ingestor) dropSpammer(ctx context.Context, wallet string, at time.Time
 	in.emit(ctx, "rotation", wallet+" -> "+reason)
 }
 
-// PauseNoisy pauses a wallet whose address shows up in too much third-party
-// traffic (the source has already unsubscribed it). Same status and next-day
-// resume as the daily trade limit.
-func (in *Ingestor) PauseNoisy(ctx context.Context, wallet string, mb, limit float64, at time.Time) {
-	in.mu.Lock()
-	delete(in.tracked, wallet)
-	in.mu.Unlock()
-	in.Src.UnsubscribeAccounts([]string{wallet})
-	reason := fmt.Sprintf("paused: other bots mention this wallet in too many txs (%.0f MB of data today, limit %.0f MB), resumes %s UTC",
-		mb, limit, utcDay(at).Add(24*time.Hour).Format("Jan 2 15:04"))
-	if _, err := in.Store.SetWalletStatus(ctx, wallet, model.StatusPaused, reason, at); err != nil {
-		slog.Warn("pause noisy wallet", "err", err)
-	}
-	slog.Warn("noise guard", "wallet", wallet, "reason", reason)
-	in.emit(ctx, "rotation", wallet+" -> "+reason)
-}
-
 // resumePaused returns wallets paused by the daily limit to the bench once a new
 // UTC day starts. Returns the wallets resumed so the caller can track them again.
 func (in *Ingestor) resumePaused(ctx context.Context, ws []model.Wallet, now time.Time) map[string]bool {

@@ -22,6 +22,7 @@ import (
 	"copytrade/internal/score"
 	"copytrade/internal/seed"
 	"copytrade/internal/sim"
+	"copytrade/internal/source"
 	"copytrade/internal/store"
 )
 
@@ -263,6 +264,8 @@ type walletRow struct {
 	Compare compare.Summary `json:"compare"`
 	// Their trades seen in the last 24h (activity).
 	Trades24h int `json:"trades_24h"`
+	// Quiet: tracked on the low-data feed because other bots spam this address.
+	Quiet bool `json:"quiet,omitempty"`
 }
 
 func (s *Server) wallets(w http.ResponseWriter, r *http.Request) {
@@ -282,13 +285,21 @@ func (s *Server) wallets(w http.ResponseWriter, r *http.Request) {
 	for _, p := range open {
 		openBy[p.Wallet]++
 	}
+	quiet := map[string]bool{}
+	if v, ok, _ := s.Store.GetSetting(ctx, source.KeyQuietWallets); ok {
+		var qs []string
+		_ = json.Unmarshal([]byte(v), &qs)
+		for _, q := range qs {
+			quiet[q] = true
+		}
+	}
 	rows := map[string]*walletRow{}
 	var out []*walletRow
 	for _, wl := range ws {
 		if wl.Status == model.StatusDropped && r.URL.Query().Get("dropped") != "1" {
 			continue
 		}
-		row := &walletRow{Wallet: wl, Scores: map[string]map[string]model.Score{}, Open: openBy[wl.Address]}
+		row := &walletRow{Wallet: wl, Scores: map[string]map[string]model.Score{}, Open: openBy[wl.Address], Quiet: quiet[wl.Address]}
 		rows[wl.Address] = row
 		out = append(out, row)
 	}

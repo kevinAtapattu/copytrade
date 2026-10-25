@@ -25,6 +25,14 @@ import (
 // Helius's plan (billed by data volume, ~2 credits per 0.1 MB).
 //
 // Only account subscriptions are supported (snapshot mode reads prices over RPC).
+//
+// Quiet wallets: other copy-trading bots put popular wallets' addresses in
+// thousands of (mostly failed) txs a minute, and logsSubscribe bills each one. A
+// wallet over WalletDailyMB is moved to a quiet feed instead: accountSubscribe on
+// the wallet itself, which only fires when its SOL balance changes (its own trades,
+// or SOL sent to it). Each notification is resolved to the wallet's txs in that
+// slot with getSignaturesForAddress + getTransaction (~1s slower, a few credits
+// per trade). The wallet is never dropped from tracking.
 type Helius struct {
 	URL string
 	// Chain fills in what logs don't carry: the wallet's token balance after the
@@ -32,10 +40,9 @@ type Helius struct {
 	Chain ChainReader
 	// DailyMB caps streamed data per UTC day; over it the stream pauses until midnight.
 	DailyMB float64
-	// WalletDailyMB caps one wallet's data per UTC day. Other copy-trading bots put
-	// popular wallets' addresses in thousands of (mostly failed) txs a minute, and
-	// Helius bills for each one. Over the cap the wallet is unsubscribed and
-	// OnNoisy is called, so one noisy wallet can't use up DailyMB for everyone.
+	// WalletDailyMB caps one wallet's log data per UTC day; over it the wallet moves
+	// to the quiet feed and OnNoisy is called (so the caller can persist it with
+	// SetQuiet on the next start).
 	WalletDailyMB float64
 	OnNoisy       func(wallet string, mb float64)
 
@@ -51,17 +58,19 @@ type Helius struct {
 	day      time.Time
 	bytes    int64
 	byWallet map[string]int64 // today's bytes per wallet
+	quiet    map[string]bool  // wallets on the balance-change feed
 }
 
 // ChainReader is the slice of the RPC client Helius needs.
 type ChainReader interface {
 	GetBalanceChange(ctx context.Context, sig, owner, mint string) (solana.BalanceChange, error)
 	GetTxEvents(ctx context.Context, sig string) (solana.TxEvents, error)
+	GetSignaturesForAddress(ctx context.Context, addr, before string, limit int) ([]solana.SigInfo, error)
 }
 
 func NewHelius(wsURL string, chain ChainReader, dailyMB float64) *Helius {
 	return &Helius{URL: wsURL, Chain: chain, DailyMB: dailyMB, MinBackoff: 3 * time.Second, MaxBackoff: 5 * time.Minute,
-		accounts: map[string]bool{}, dirty: make(chan struct{}, 1), pauseCh: make(chan struct{}, 1), resumeCh: make(chan struct{}, 1)}
+		accounts: map[string]bool{}, quiet: map[string]bool{}, dirty: make(chan struct{}, 1), pauseCh: make(chan struct{}, 1), resumeCh: make(chan struct{}, 1)}
 }
 
 func (h *Helius) SubscribeAccounts(keys []string)   { h.setAccounts(keys, true) }
@@ -70,6 +79,27 @@ func (h *Helius) UnsubscribeAccounts(keys []string) { h.setAccounts(keys, false)
 // Token streams are not used in snapshot mode; prices come from curve reads.
 func (h *Helius) SubscribeTokens([]string)   {}
 func (h *Helius) UnsubscribeTokens([]string) {}
+
+// SetQuiet puts wallets on the quiet (balance-change) feed.
+func (h *Helius) SetQuiet(keys []string) {
+	h.mu.Lock()
+	for _, k := range keys {
+		h.quiet[k] = true
+	}
+	h.mu.Unlock()
+	signal(h.dirty)
+}
+
+// Quiet lists wallets on the quiet feed.
+func (h *Helius) Quiet() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]string, 0, len(h.quiet))
+	for k := range h.quiet {
+		out = append(out, k)
+	}
+	return out
+}
 
 func (h *Helius) setAccounts(keys []string, add bool) {
 	h.mu.Lock()
@@ -103,6 +133,11 @@ func (h *Helius) Stats() Stats {
 	defer h.mu.Unlock()
 	s := h.stats
 	s.Accounts = len(h.accounts)
+	for a := range h.accounts {
+		if h.quiet[a] {
+			s.Quiet++
+		}
+	}
 	s.BytesToday = h.bytes
 	return s
 }
@@ -118,13 +153,13 @@ func (h *Helius) count(n int, now time.Time) (over bool) {
 	return h.DailyMB > 0 && float64(h.bytes) >= h.DailyMB*1e6
 }
 
-// countWallet adds n bytes to wallet's day. The first time the wallet goes over
-// WalletDailyMB it is dropped from the subscription set and noisy=true.
+// countWallet adds n bytes of log data to wallet's day. The first time the wallet
+// goes over WalletDailyMB it moves to the quiet feed and noisy=true.
 // Caller has called count for the same frame (which resets the day).
 func (h *Helius) countWallet(wallet string, n int) (noisy bool, mb float64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.WalletDailyMB <= 0 || !h.accounts[wallet] {
+	if h.WalletDailyMB <= 0 || !h.accounts[wallet] || h.quiet[wallet] {
 		return false, 0
 	}
 	if h.byWallet == nil {
@@ -135,7 +170,7 @@ func (h *Helius) countWallet(wallet string, n int) (noisy bool, mb float64) {
 	if mb < h.WalletDailyMB {
 		return false, mb
 	}
-	delete(h.accounts, wallet)
+	h.quiet[wallet] = true
 	return true, mb
 }
 
@@ -144,6 +179,9 @@ func (h *Helius) isPaused() bool {
 	defer h.mu.Unlock()
 	return h.paused
 }
+
+// KeyQuietWallets is the setting that remembers quiet-feed wallets (JSON list).
+const KeyQuietWallets = "helius_quiet_wallets"
 
 var errOverCap = errors.New("helius daily data cap reached")
 
@@ -222,6 +260,7 @@ type note struct {
 	wallet, sig string
 	logs        []string
 	at          time.Time
+	slot        uint64 // quiet feed: the slot the wallet's balance changed in (sig is empty)
 }
 
 func (h *Helius) session(ctx context.Context, work chan<- note) error {
@@ -241,38 +280,54 @@ func (h *Helius) session(ctx context.Context, work chan<- note) error {
 	}()
 
 	// Subscription bookkeeping, owned by this goroutine.
-	subOf := map[string]int64{}    // wallet -> subscription id
-	walletOf := map[int64]string{} // subscription id -> wallet
-	reqWallet := map[int]string{}  // pending logsSubscribe request id -> wallet
+	type sub struct {
+		wallet string
+		quiet  bool // accountSubscribe rather than logsSubscribe
+	}
+	subOf := map[string]int64{} // wallet -> subscription id
+	kindOf := map[string]bool{} // wallet -> its subscription is the quiet feed
+	walletOf := map[int64]sub{} // subscription id -> wallet
+	reqWallet := map[int]sub{}  // pending subscribe request id -> wallet
 	inflight := map[string]bool{}
 	nextID := 0
 	resync := func() error {
 		h.mu.Lock()
-		want := make(map[string]bool, len(h.accounts))
+		want := make(map[string]bool, len(h.accounts)) // wallet -> quiet
 		for a := range h.accounts {
-			want[a] = true
+			want[a] = h.quiet[a]
 		}
 		h.mu.Unlock()
-		for a := range want {
+		// Drop subscriptions no longer wanted, or of the wrong kind.
+		for a, sid := range subOf {
+			if q, ok := want[a]; ok && q == kindOf[a] {
+				continue
+			}
+			method := "logsUnsubscribe"
+			if kindOf[a] {
+				method = "accountUnsubscribe"
+			}
+			nextID++
+			delete(subOf, a)
+			delete(kindOf, a)
+			delete(walletOf, sid)
+			if err := conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": nextID, "method": method, "params": []any{sid}}); err != nil {
+				return err
+			}
+		}
+		for a, q := range want {
 			if _, ok := subOf[a]; ok || inflight[a] {
 				continue
 			}
 			nextID++
-			reqWallet[nextID] = a
+			reqWallet[nextID] = sub{a, q}
 			inflight[a] = true
-			if err := conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": nextID, "method": "logsSubscribe",
-				"params": []any{map[string]any{"mentions": []string{a}}, map[string]any{"commitment": "confirmed"}}}); err != nil {
-				return err
+			req := map[string]any{"jsonrpc": "2.0", "id": nextID, "method": "logsSubscribe",
+				"params": []any{map[string]any{"mentions": []string{a}}, map[string]any{"commitment": "confirmed"}}}
+			if q {
+				req["method"] = "accountSubscribe"
+				req["params"] = []any{a, map[string]any{"commitment": "confirmed", "encoding": "base64"}}
 			}
-		}
-		for a, sid := range subOf {
-			if want[a] {
-				continue
-			}
-			nextID++
-			delete(subOf, a)
-			delete(walletOf, sid)
-			if err := conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": nextID, "method": "logsUnsubscribe", "params": []any{sid}}); err != nil {
+			if err := conn.WriteJSON(req); err != nil {
 				return err
 			}
 		}
@@ -335,11 +390,15 @@ func (h *Helius) session(ctx context.Context, work chan<- note) error {
 			}
 			var m struct {
 				ID     int             `json:"id"`
+				Method string          `json:"method"`
 				Result json.RawMessage `json:"result"`
 				Error  json.RawMessage `json:"error"`
 				Params struct {
 					Subscription int64 `json:"subscription"`
 					Result       struct {
+						Context struct {
+							Slot uint64 `json:"slot"`
+						} `json:"context"`
 						Value struct {
 							Signature string   `json:"signature"`
 							Err       any      `json:"err"`
@@ -352,22 +411,35 @@ func (h *Helius) session(ctx context.Context, work chan<- note) error {
 				continue
 			}
 			if m.ID != 0 {
-				if a, ok := reqWallet[m.ID]; ok {
+				if r, ok := reqWallet[m.ID]; ok {
 					delete(reqWallet, m.ID)
-					delete(inflight, a)
+					delete(inflight, r.wallet)
 					var sid int64
 					if len(m.Error) > 0 || json.Unmarshal(m.Result, &sid) != nil {
-						h.setErr("logsSubscribe failed: " + string(m.Error))
+						h.setErr("subscribe failed: " + string(m.Error))
 						continue
 					}
-					subOf[a], walletOf[sid] = sid, a
+					subOf[r.wallet], kindOf[r.wallet], walletOf[sid] = sid, r.quiet, r
+					// The wanted kind may have changed while the request was in flight.
+					signal(h.dirty)
 				}
 				continue
 			}
-			w := walletOf[m.Params.Subscription]
+			sb := walletOf[m.Params.Subscription]
+			w := sb.wallet
+			if sb.quiet {
+				if m.Method == "accountNotification" {
+					select {
+					case work <- note{wallet: w, slot: m.Params.Result.Context.Slot, at: f.at}:
+					default:
+						h.setErr("trade queue full; dropped a notification")
+					}
+				}
+				continue
+			}
 			if w != "" {
 				if noisy, mb := h.countWallet(w, len(f.data)); noisy {
-					slog.Warn("helius: wallet over its daily data cap, unsubscribing", "wallet", w, "mb", mb)
+					slog.Warn("helius: wallet over its daily log-data cap, moving it to the quiet feed", "wallet", w, "mb", mb)
 					if err := resync(); err != nil {
 						return err
 					}
@@ -405,6 +477,9 @@ func mentionsPump(logs []string) bool {
 // convert turns one notification into the wallet's trades, filling in the
 // wallet's token balance after the trade.
 func (h *Helius) convert(ctx context.Context, n note) []model.Trade {
+	if n.sig == "" {
+		return h.convertQuiet(ctx, n)
+	}
 	trades, truncated := TradesFromLogs(n.sig, n.wallet, n.logs, n.at)
 	if truncated && h.Chain != nil {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -417,6 +492,51 @@ func (h *Helius) convert(ctx context.Context, n note) []model.Trade {
 	for i := range trades {
 		t := &trades[i]
 		t.NewTokenBalance = h.balanceAfter(ctx, *t)
+	}
+	return trades
+}
+
+// convertQuiet resolves a quiet-feed balance change to the wallet's pump.fun
+// trades in that slot. Bots fill the wallet's signature list with their own txs,
+// so the list is filtered to successful txs in the notified slot.
+func (h *Helius) convertQuiet(ctx context.Context, n note) []model.Trade {
+	if h.Chain == nil {
+		return nil
+	}
+	var sigs []string
+	for attempt := 0; attempt < 3 && len(sigs) == 0; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Second):
+			}
+		}
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		list, err := h.Chain.GetSignaturesForAddress(cctx, n.wallet, "", 1000)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, si := range list {
+			if si.Slot == n.slot && si.Err == nil {
+				sigs = append(sigs, si.Signature)
+			}
+		}
+	}
+	var trades []model.Trade
+	for _, sig := range sigs {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		tx, err := h.Chain.GetTxEvents(cctx, sig)
+		cancel()
+		if err != nil || tx.Failed || !mentionsPump(tx.Logs) {
+			continue // a SOL transfer, another DEX, or a lookup error
+		}
+		ts := tradesFromEvents(sig, n.wallet, history.EventsFromTx(tx), n.at)
+		for i := range ts {
+			ts[i].NewTokenBalance = h.balanceAfter(ctx, ts[i])
+		}
+		trades = append(trades, ts...)
 	}
 	return trades
 }
