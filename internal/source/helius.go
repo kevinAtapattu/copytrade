@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +76,7 @@ type ChainReader interface {
 	GetTxEvents(ctx context.Context, sig string) (solana.TxEvents, error)
 	GetSignaturesForAddress(ctx context.Context, addr, before string, limit int) ([]solana.SigInfo, error)
 	GetMultipleAccounts(ctx context.Context, addrs []string) ([][]byte, error)
-	OwnerTokenBalance(ctx context.Context, owner, mint string) (float64, bool, error)
+	OwnerTokenAccounts(ctx context.Context, owner, mint string) (map[string]float64, error)
 }
 
 func NewHelius(wsURL string, chain ChainReader, dailyMB float64) *Helius {
@@ -504,11 +506,7 @@ func (h *Helius) convert(ctx context.Context, n note) []model.Trade {
 		}
 	}
 	trades = append(trades, h.ammTrades(ctx, n.sig, n.wallet, amm, n.at)...)
-	for i := range trades {
-		t := &trades[i]
-		t.NewTokenBalance = h.balanceAfter(ctx, *t)
-	}
-	return trades
+	return h.withBalances(ctx, trades)
 }
 
 // convertQuiet resolves a quiet-feed balance change to the wallet's pump.fun
@@ -547,11 +545,7 @@ func (h *Helius) convertQuiet(ctx context.Context, n note) []model.Trade {
 		if err != nil || tx.Failed || !mentionsTrade(tx.Logs) {
 			continue // a SOL transfer, another DEX, or a lookup error
 		}
-		ts := h.TradesFromTx(ctx, sig, n.wallet, tx, n.at)
-		for i := range ts {
-			ts[i].NewTokenBalance = h.balanceAfter(ctx, ts[i])
-		}
-		trades = append(trades, ts...)
+		trades = append(trades, h.withBalances(ctx, h.TradesFromTx(ctx, sig, n.wallet, tx, n.at))...)
 	}
 	return trades
 }
@@ -634,9 +628,26 @@ func (h *Helius) pool(ctx context.Context, addr string) (pumpswap.Pool, bool) {
 	return p, true
 }
 
+// withBalances fills each trade's post-trade balance and drops routing hops.
+func (h *Helius) withBalances(ctx context.Context, ts []model.Trade) []model.Trade {
+	out := ts[:0]
+	for _, t := range ts {
+		bal, hop := h.balanceAfter(ctx, t)
+		if hop {
+			slog.Info("skipping routing hop: the wallet's balance of this token did not change", "wallet", t.Trader, "mint", t.Mint, "sig", t.Signature)
+			continue
+		}
+		t.NewTokenBalance = bal
+		out = append(out, t)
+	}
+	return out
+}
+
 // balanceAfter reads the wallet's post-trade balance (tx may need a moment to be
 // queryable). Fallback: a buy holds what it bought, a sell is treated as a full exit.
-func (h *Helius) balanceAfter(ctx context.Context, t model.Trade) float64 {
+// hop reports that the tx left the wallet's balance of the mint unchanged: the
+// token was only a stepping stone in a multi-pool swap (SOL -> A -> B), not a trade.
+func (h *Helius) balanceAfter(ctx context.Context, t model.Trade) (bal float64, hop bool) {
 	sig, _, _ := strings.Cut(t.Signature, "#")
 	if h.Chain != nil {
 		for attempt := 0; attempt < 2; attempt++ {
@@ -644,36 +655,47 @@ func (h *Helius) balanceAfter(ctx context.Context, t model.Trade) float64 {
 			bc, err := h.Chain.GetBalanceChange(cctx, sig, t.Trader, t.Mint)
 			cancel()
 			if err == nil {
-				if t.Side == model.SideSell {
-					return h.sellBalance(ctx, t, bc.TokenAfter)
+				if math.Abs(bc.TokenDelta) < t.TokenAmount*0.01 {
+					return 0, true
 				}
-				return bc.TokenAfter
+				if t.Side == model.SideSell {
+					return h.sellBalance(ctx, t, bc), false
+				}
+				return bc.TokenAfter, false
 			}
 			select {
 			case <-ctx.Done():
-				return 0
+				return 0, false
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
 	}
 	if t.Side == model.SideBuy {
-		return t.TokenAmount
+		return t.TokenAmount, false
 	}
-	return 0
+	return 0, false
 }
 
 // sellBalance corrects a sell's balance-after for wallets that keep one token in
 // several accounts (theo does): the tx only shows the accounts it touched, so
-// emptying one looks like a full exit. Their total across all accounts, read now
-// (about a second later), wins when it is higher.
-func (h *Helius) sellBalance(ctx context.Context, t model.Trade, inTx float64) float64 {
+// emptying one looks like a full exit. It adds what the wallet holds in accounts
+// the tx did not touch. Those are read now, but only untouched ones count: the
+// RPC can still show a touched account's pre-sell balance (CXVJew's sells read
+// as if nothing was sold), and the tx itself is the truth for those.
+func (h *Helius) sellBalance(ctx context.Context, t model.Trade, bc solana.BalanceChange) float64 {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	total, found, err := h.Chain.OwnerTokenBalance(cctx, t.Trader, t.Mint)
+	accts, err := h.Chain.OwnerTokenAccounts(cctx, t.Trader, t.Mint)
 	cancel()
-	if err == nil && found && total > inTx {
-		return total
+	if err != nil {
+		return bc.TokenAfter
 	}
-	return inTx
+	bal := bc.TokenAfter
+	for addr, v := range accts {
+		if !slices.Contains(bc.TokenAccounts, addr) {
+			bal += v
+		}
+	}
+	return bal
 }
 
 // TradesFromLogs decodes the wallet's pump.fun trades from a transaction's logs.

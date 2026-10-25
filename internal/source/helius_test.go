@@ -65,12 +65,13 @@ type fakeChain struct {
 	sigs     []solana.SigInfo
 	txs      map[string]solana.TxEvents
 	accounts map[string][]byte
-	owners   map[string]float64 // owner+mint -> total balance across all accounts
+	owners   map[string]map[string]float64 // owner+mint -> balance by token account
+	touched  []string                      // token accounts every tx touches
+	hops     map[string]bool               // sigs that leave the wallet's token balance unchanged
 }
 
-func (f fakeChain) OwnerTokenBalance(_ context.Context, owner, mint string) (float64, bool, error) {
-	v, ok := f.owners[owner+mint]
-	return v, ok, nil
+func (f fakeChain) OwnerTokenAccounts(_ context.Context, owner, mint string) (map[string]float64, error) {
+	return f.owners[owner+mint], nil
 }
 
 func (f fakeChain) GetMultipleAccounts(_ context.Context, addrs []string) ([][]byte, error) {
@@ -86,7 +87,10 @@ func (f fakeChain) GetBalanceChange(_ context.Context, sig, owner, mint string) 
 	if !ok {
 		return solana.BalanceChange{}, errors.New("not found")
 	}
-	return solana.BalanceChange{TokenAfter: v}, nil
+	if f.hops[sig] {
+		return solana.BalanceChange{TokenAfter: v, TokenAccounts: f.touched}, nil // balance unchanged
+	}
+	return solana.BalanceChange{TokenAfter: v, TokenDelta: 1e9, TokenAccounts: f.touched}, nil
 }
 func (f fakeChain) GetTxEvents(_ context.Context, sig string) (solana.TxEvents, error) {
 	tx, ok := f.txs[sig]
@@ -337,17 +341,46 @@ func TestPumpSwapIgnoresNonCanonicalPool(t *testing.T) {
 	}
 }
 
+// King-Solomon bought token B through A's pool (SOL -> A -> B): the A legs leave
+// his A balance unchanged and must not be copied as an A buy and sell.
+func TestRoutingHopThroughPumpTokenIsDropped(t *testing.T) {
+	raw, _ := os.ReadFile("../pumpswap/testdata/mainnet.json")
+	var fx struct {
+		Sell struct {
+			Signature string   `json:"signature"`
+			Logs      []string `json:"logs"`
+		} `json:"sell"`
+		PoolB64 string `json:"pool_b64"`
+	}
+	_ = json.Unmarshal(raw, &fx)
+	poolData, _ := base64.StdEncoding.DecodeString(fx.PoolB64)
+	h := NewHelius("", fakeChain{after: map[string]float64{fx.Sell.Signature: 5e6}, hops: map[string]bool{fx.Sell.Signature: true},
+		accounts: map[string][]byte{"4xMCDt7EuE1HDA6h4AF2F9xQWSBk1BXduj3y7eukkVby": poolData}}, 0)
+	got := h.convert(context.Background(), note{wallet: "FzVQSzj8JJr6WMGqbUHzx2XH1KkrfxRrRPv6WcbbZmND", sig: fx.Sell.Signature, logs: fx.Sell.Logs, at: time.Now()})
+	if len(got) != 0 {
+		t.Fatalf("routing hop recorded as a trade: %+v", got)
+	}
+}
+
 // theo keeps one token in two accounts: a sell that empties one of them must not
 // read as a full exit (our copy would sell everything instead of a third).
 func TestSellBalanceCountsAllAccounts(t *testing.T) {
 	sell := model.Trade{Signature: "S", Trader: hWallet, Mint: hMint, Side: model.SideSell, TokenAmount: 29.8e6}
-	h := NewHelius("", fakeChain{after: map[string]float64{"S": 0}, owners: map[string]float64{hWallet + hMint: 61.4e6}}, 0)
-	if got := h.balanceAfter(context.Background(), sell); got != 61.4e6 {
+	h := NewHelius("", fakeChain{after: map[string]float64{"S": 0}, touched: []string{"A"},
+		owners: map[string]map[string]float64{hWallet + hMint: {"A": 0, "B": 61.4e6}}}, 0)
+	if got, _ := h.balanceAfter(context.Background(), sell); got != 61.4e6 {
 		t.Fatalf("balance after %v, want 61.4M held in the other account", got)
 	}
 	// A real full exit stays a full exit.
-	h = NewHelius("", fakeChain{after: map[string]float64{"S": 0}, owners: map[string]float64{}}, 0)
-	if got := h.balanceAfter(context.Background(), sell); got != 0 {
+	h = NewHelius("", fakeChain{after: map[string]float64{"S": 0}, touched: []string{"A"}}, 0)
+	if got, _ := h.balanceAfter(context.Background(), sell); got != 0 {
 		t.Fatalf("balance after %v, want 0", got)
+	}
+	// The RPC can still show the sold account's pre-sell balance (CXVJew): the tx
+	// is the truth for accounts it touched, so this is still a full exit.
+	h = NewHelius("", fakeChain{after: map[string]float64{"S": 0}, touched: []string{"A"},
+		owners: map[string]map[string]float64{hWallet + hMint: {"A": 29.8e6}}}, 0)
+	if got, _ := h.balanceAfter(context.Background(), sell); got != 0 {
+		t.Fatalf("balance after %v, want 0: a stale read of the sold account must not count", got)
 	}
 }

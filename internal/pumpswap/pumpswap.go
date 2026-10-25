@@ -156,7 +156,9 @@ type Pool struct {
 // ParsePool parses a PumpSwap pool account.
 // Layout: disc 8, bump 1, index 2, creator 32, base_mint 32, quote_mint 32,
 // lp_mint 32, base vault 32, quote vault 32, lp_supply 8, coin_creator 32,
-// two flag bytes, virtual quote reserves u64 at 245.
+// two flag bytes, virtual quote reserves at 245. Some pools hold all ones there
+// (-1 as a signed number, seen on mainnet in October 2026) and read 0 later;
+// trades on them fit plain constant product, so anything negative counts as 0.
 func ParsePool(d []byte) (Pool, error) {
 	if len(d) < 203 {
 		return Pool{}, errors.New("pumpswap pool account too short")
@@ -164,7 +166,7 @@ func ParsePool(d []byte) (Pool, error) {
 	pk := func(off int) string { return base58.Encode(d[off : off+32]) }
 	p := Pool{BaseMint: pk(43), QuoteMint: pk(75), BaseVault: pk(139), QuoteVault: pk(171)}
 	if len(d) >= 253 {
-		p.VirtualQuote = float64(binary.LittleEndian.Uint64(d[245:])) / solUnit
+		p.VirtualQuote = float64(max(int64(binary.LittleEndian.Uint64(d[245:])), 0)) / solUnit
 	}
 	return p, nil
 }

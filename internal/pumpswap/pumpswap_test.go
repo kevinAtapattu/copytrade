@@ -144,3 +144,16 @@ func TestStateFromVaults(t *testing.T) {
 		t.Fatalf("state %+v %v", st, err)
 	}
 }
+
+// H74CYm's pool held all ones in the virtual reserve field; read as unsigned it
+// added 18 billion SOL to the price and our copies bought a fraction of a token.
+func TestVirtualReserveAllOnesIsZero(t *testing.T) {
+	d, _ := base64.StdEncoding.DecodeString(load(t).PoolB64)
+	for i := 245; i < 253; i++ {
+		d[i] = 0xff
+	}
+	p, err := ParsePool(d)
+	if err != nil || p.VirtualQuote != 0 {
+		t.Fatalf("virtual quote %v %v", p.VirtualQuote, err)
+	}
+}

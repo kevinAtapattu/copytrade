@@ -299,8 +299,19 @@ func (r *RPC) GetSignaturesForAddress(ctx context.Context, addr, before string, 
 // OwnerTokenBalance sums owner's balance of mint across all its token accounts
 // (any token program), in UI units. found=false when it has no account at all.
 func (r *RPC) OwnerTokenBalance(ctx context.Context, owner, mint string) (balance float64, found bool, err error) {
+	accts, err := r.OwnerTokenAccounts(ctx, owner, mint)
+	for _, v := range accts {
+		balance += v
+	}
+	return balance, len(accts) > 0, err
+}
+
+// OwnerTokenAccounts returns owner's balance of mint in each of its token
+// accounts, by account address, in UI units.
+func (r *RPC) OwnerTokenAccounts(ctx context.Context, owner, mint string) (map[string]float64, error) {
 	var out struct {
 		Value []struct {
+			Pubkey  string `json:"pubkey"`
 			Account struct {
 				Data struct {
 					Parsed struct {
@@ -314,16 +325,17 @@ func (r *RPC) OwnerTokenBalance(ctx context.Context, owner, mint string) (balanc
 			} `json:"account"`
 		} `json:"value"`
 	}
-	err = r.call(ctx, "getTokenAccountsByOwner", []any{owner, map[string]any{"mint": mint},
+	err := r.call(ctx, "getTokenAccountsByOwner", []any{owner, map[string]any{"mint": mint},
 		map[string]any{"encoding": "jsonParsed", "commitment": "confirmed"}}, &out)
 	if err != nil {
-		return 0, false, err
+		return nil, err
 	}
+	accts := map[string]float64{}
 	for _, v := range out.Value {
 		f, _ := strconv.ParseFloat(v.Account.Data.Parsed.Info.TokenAmount.UIAmountString, 64)
-		balance += f
+		accts[v.Pubkey] = f
 	}
-	return balance, len(out.Value) > 0, nil
+	return accts, nil
 }
 
 // TxEvents is the raw material for decoding program events from one transaction:
@@ -459,8 +471,10 @@ type BalanceChange struct {
 	SolDelta   float64 // post - pre, includes network fee (negative on buys)
 	TokenDelta float64 // post - pre for the mint, UI units
 	TokenAfter float64 // owner's balance of the mint after the tx, UI units
-	FeeSol     float64
-	BlockTime  time.Time
+	// TokenAccounts are the owner's token accounts for the mint that the tx touched.
+	TokenAccounts []string
+	FeeSol        float64
+	BlockTime     time.Time
 }
 
 // GetBalanceChange reads a confirmed tx and returns our SOL and token deltas.
@@ -504,10 +518,20 @@ func (r *RPC) GetBalanceChange(ctx context.Context, sig, owner, mint string) (Ba
 	}
 	bc.TokenAfter = sumTok(tx.Meta.PostToken, owner, mint)
 	bc.TokenDelta = bc.TokenAfter - sumTok(tx.Meta.PreToken, owner, mint)
+	seen := map[string]bool{}
+	for _, b := range append(tx.Meta.PreToken, tx.Meta.PostToken...) {
+		if b.Owner == owner && b.Mint == mint && b.AccountIndex < len(tx.Transaction.Message.AccountKeys) {
+			if k := tx.Transaction.Message.AccountKeys[b.AccountIndex].Pubkey; !seen[k] {
+				seen[k] = true
+				bc.TokenAccounts = append(bc.TokenAccounts, k)
+			}
+		}
+	}
 	return bc, nil
 }
 
 type tokBal struct {
+	AccountIndex  int    `json:"accountIndex"`
 	Mint          string `json:"mint"`
 	Owner         string `json:"owner"`
 	UITokenAmount struct {
