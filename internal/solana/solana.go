@@ -430,6 +430,37 @@ func (r *RPC) SendTransaction(ctx context.Context, raw []byte) (string, error) {
 	return sig, err
 }
 
+// SimResult is what the node says a transaction would do. Nothing is sent.
+type SimResult struct {
+	Err   string // "" when it would succeed
+	Logs  []string
+	Units uint64
+}
+
+// SimulateTransaction runs raw against current chain state without sending it.
+// With sigVerify the signatures must be valid (our own signed tx); without it the
+// node swaps in a fresh blockhash, so an unsigned tx built for another wallet works.
+func (r *RPC) SimulateTransaction(ctx context.Context, raw []byte, sigVerify bool) (SimResult, error) {
+	var res struct {
+		Value struct {
+			Err   any      `json:"err"`
+			Logs  []string `json:"logs"`
+			Units uint64   `json:"unitsConsumed"`
+		} `json:"value"`
+	}
+	err := r.call(ctx, "simulateTransaction", []any{base64.StdEncoding.EncodeToString(raw),
+		map[string]any{"encoding": "base64", "sigVerify": sigVerify, "replaceRecentBlockhash": !sigVerify, "commitment": "processed"}}, &res)
+	if err != nil {
+		return SimResult{}, err
+	}
+	out := SimResult{Logs: res.Value.Logs, Units: res.Value.Units}
+	if res.Value.Err != nil {
+		b, _ := json.Marshal(res.Value.Err)
+		out.Err = string(b)
+	}
+	return out, nil
+}
+
 type SigStatus struct {
 	Found              bool
 	Err                string

@@ -105,6 +105,6 @@ func buildTrader(live bool, a *app.App) exec.Trader {
 	}
 	slog.Warn("LIVE TRADING ENABLED", "wallet", kp.PublicBase58(), "size_usd", c.ExecSizeUSD)
 	return &exec.Live{Key: kp, RPC: solana.NewRPC(c.SolanaRPCURL), TradeURL: c.PumpPortalTradeURL,
-		SlippagePct: c.ExecSlippagePct, PriorityFee: c.ExecPriorityFee, JitoTipSol: c.JitoTipSol, JitoURL: c.JitoURL,
+		SlippagePct: c.ExecSlippagePct, PriorityFee: c.ExecPriorityFee, JitoTipSol: c.JitoTipSol, JitoURL: c.JitoURL, JupiterURL: c.JupiterURL,
 		MaxAttempts: c.ExecMaxAttempts, HTTP: &http.Client{Timeout: 15 * time.Second}, ConfirmWait: 30 * time.Second}
 }

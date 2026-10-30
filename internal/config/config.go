@@ -89,6 +89,7 @@ type Config struct {
 	DailyLossLimitUSD     float64
 	ExecMaxAttempts       int
 	PumpPortalTradeURL    string
+	JupiterURL            string // builds buys on graduated tokens; "" = PumpPortal for all
 	PumpPortalLocalFeePct float64
 
 	// Alerts
@@ -175,6 +176,7 @@ func Load() Config {
 		DailyLossLimitUSD:     flt("DAILY_LOSS_LIMIT_USD", 75),
 		ExecMaxAttempts:       integer("EXEC_MAX_ATTEMPTS", 3),
 		PumpPortalTradeURL:    str("PUMPPORTAL_TRADE_URL", "https://pumpportal.fun/api/trade-local"),
+		JupiterURL:            str("JUPITER_URL", "https://lite-api.jup.ag/swap/v1"),
 		PumpPortalLocalFeePct: flt("PUMPPORTAL_LOCAL_FEE_PCT", 0.5),
 
 		DiscordWebhookURL: str("DISCORD_WEBHOOK_URL", ""),

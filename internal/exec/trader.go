@@ -5,12 +5,14 @@ package exec
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -70,6 +72,9 @@ func (p Paper) Execute(_ context.Context, o Order) (Result, error) {
 
 // Live builds the tx with PumpPortal's local trade API, signs it locally, sends it
 // through our RPC (or Jito), waits for confirmation, and reads the real fill.
+// Buys on graduated (PumpSwap) tokens are built with Jupiter instead: PumpPortal
+// prices them without the pool's virtual SOL reserve, so on a fresh pool its max
+// spend is far too low and the buy fails on-chain (see docs/DECISIONS.md).
 type Live struct {
 	Key         solana.Keypair
 	RPC         *solana.RPC
@@ -78,6 +83,7 @@ type Live struct {
 	PriorityFee float64
 	JitoTipSol  float64
 	JitoURL     string
+	JupiterURL  string // swap API base, e.g. https://lite-api.jup.ag/swap/v1; "" = PumpPortal for everything
 	MaxAttempts int
 	HTTP        *http.Client
 	ConfirmWait time.Duration
@@ -114,25 +120,22 @@ func (l *Live) request(o Order) tradeReq {
 	return r
 }
 
-// build asks PumpPortal for a fresh transaction (fresh blockhash every call).
-func (l *Live) build(ctx context.Context, o Order) (*solana.Tx, error) {
+// build asks for a fresh transaction (fresh blockhash every call) for owner.
+func (l *Live) build(ctx context.Context, o Order, owner string) (*solana.Tx, error) {
+	if l.jupiter(o) {
+		return l.buildJupiter(ctx, o, owner)
+	}
 	req := l.request(o)
+	req.PublicKey = owner
 	var body []byte
 	if l.JitoTipSol > 0 {
 		body, _ = json.Marshal([]tradeReq{req})
 	} else {
 		body, _ = json.Marshal(req)
 	}
-	hr, _ := http.NewRequestWithContext(ctx, http.MethodPost, l.TradeURL, bytes.NewReader(body))
-	hr.Header.Set("Content-Type", "application/json")
-	resp, err := l.HTTP.Do(hr)
+	data, err := l.call(ctx, http.MethodPost, l.TradeURL, body)
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("trade-local %s: %s", resp.Status, truncate(string(data), 200))
+		return nil, fmt.Errorf("trade-local %w", err)
 	}
 	if l.JitoTipSol > 0 {
 		var txs []string
@@ -146,8 +149,56 @@ func (l *Live) build(ctx context.Context, o Order) (*solana.Tx, error) {
 	return solana.ParseTx(data)
 }
 
-func (l *Live) send(ctx context.Context, tx *solana.Tx) error {
-	if l.JitoTipSol > 0 {
+func (l *Live) jupiter(o Order) bool { return o.Side == "buy" && o.State.AMM && l.JupiterURL != "" }
+
+// buildJupiter gets a quote for SolIn SOL -> mint and the swap tx for it. Jupiter
+// is sent through our RPC even when Jito is on (its tx carries no tip).
+func (l *Live) buildJupiter(ctx context.Context, o Order, owner string) (*solana.Tx, error) {
+	q := url.Values{"inputMint": {wsol}, "outputMint": {o.Mint}, "amount": {strconv.FormatInt(int64(o.SolIn*solana.LamportsPerSol), 10)},
+		"slippageBps": {strconv.Itoa(int(l.SlippagePct * 100))}}
+	quote, err := l.call(ctx, http.MethodGet, l.JupiterURL+"/quote?"+q.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("jupiter quote: %w", err)
+	}
+	body, _ := json.Marshal(map[string]any{"quoteResponse": json.RawMessage(quote), "userPublicKey": owner, "wrapAndUnwrapSol": true,
+		"dynamicComputeUnitLimit": true, "prioritizationFeeLamports": map[string]any{"priorityLevelWithMaxLamports": map[string]any{
+			"maxLamports": int64(l.PriorityFee * solana.LamportsPerSol), "priorityLevel": "veryHigh"}}})
+	data, err := l.call(ctx, http.MethodPost, l.JupiterURL+"/swap", body)
+	if err != nil {
+		return nil, fmt.Errorf("jupiter swap: %w", err)
+	}
+	var sr struct {
+		SwapTransaction string `json:"swapTransaction"`
+	}
+	if err := json.Unmarshal(data, &sr); err != nil || sr.SwapTransaction == "" {
+		return nil, fmt.Errorf("jupiter swap: no transaction: %s", truncate(string(data), 200))
+	}
+	raw, err := base64.StdEncoding.DecodeString(sr.SwapTransaction)
+	if err != nil {
+		return nil, err
+	}
+	return solana.ParseTx(raw)
+}
+
+const wsol = "So11111111111111111111111111111111111111112"
+
+func (l *Live) call(ctx context.Context, method, u string, body []byte) ([]byte, error) {
+	hr, _ := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(body))
+	hr.Header.Set("Content-Type", "application/json")
+	resp, err := l.HTTP.Do(hr)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", resp.Status, truncate(string(data), 200))
+	}
+	return data, nil
+}
+
+func (l *Live) send(ctx context.Context, tx *solana.Tx, jito bool) error {
+	if jito {
 		_, err := solana.SendJitoBundle(ctx, l.HTTP, l.JitoURL, []string{base58.Encode(tx.Raw)})
 		return err
 	}
@@ -178,7 +229,7 @@ func (l *Live) Execute(ctx context.Context, o Order) (Result, error) {
 type fatalErr struct{ error }
 
 func (l *Live) once(ctx context.Context, o Order) (Result, error) {
-	tx, err := l.build(ctx, o)
+	tx, err := l.build(ctx, o, l.Key.PublicBase58())
 	if err != nil {
 		return Result{}, err
 	}
@@ -186,7 +237,7 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 		return Result{}, &fatalErr{err}
 	}
 	sig := tx.Signature()
-	if err := l.send(ctx, tx); err != nil {
+	if err := l.send(ctx, tx, l.JitoTipSol > 0 && !l.jupiter(o)); err != nil {
 		var rej *solana.RPCError
 		if errors.As(err, &rej) {
 			return Result{Signature: sig}, err // node definitely rejected it: safe to rebuild now
@@ -214,6 +265,28 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 		r.SolAmount, r.Tokens = bc.SolDelta, -bc.TokenDelta
 	}
 	return r, nil
+}
+
+// DryRun builds the exact transaction Execute would send for o and simulates it
+// instead of sending it, so nothing is spent. With as == "" it is built for and
+// signed by our key (checks signing; fails on funds if the key has no SOL). With
+// another funded wallet's address it is built for that wallet and left unsigned,
+// which checks the trade itself would go through.
+func (l *Live) DryRun(ctx context.Context, o Order, as string) (solana.SimResult, error) {
+	owner := as
+	if owner == "" {
+		owner = l.Key.PublicBase58()
+	}
+	tx, err := l.build(ctx, o, owner)
+	if err != nil {
+		return solana.SimResult{}, err
+	}
+	if as == "" {
+		if err := tx.Sign(l.Key); err != nil {
+			return solana.SimResult{}, err
+		}
+	}
+	return l.RPC.SimulateTransaction(ctx, tx.Raw, as == "")
 }
 
 // confirm polls until the tx is confirmed (true), failed on-chain (error), or

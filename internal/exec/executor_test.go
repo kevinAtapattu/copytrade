@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -323,5 +324,56 @@ func TestManualSellTakesProfitThenCopyFinishes(t *testing.T) {
 	}
 	if err := ex.ManualSell(ctx, ps[0].ID, 150, t0); err == nil {
 		t.Fatal("accepted 150%")
+	}
+}
+
+// PumpPortal prices PumpSwap buys without the pool's virtual reserve, so buys on
+// graduated tokens go through Jupiter; everything else stays on PumpPortal.
+func TestLiveBuysGraduatedTokensThroughJupiter(t *testing.T) {
+	pk := ed25519.NewKeyFromSeed(make([]byte, 32))
+	kp, _ := solana.ParseKeypair(base58.Encode(pk))
+	var pumpportal atomic.Int32
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pumpportal.Add(1)
+		w.Write(unsignedTx(kp.Public))
+	}))
+	defer pp.Close()
+	var quote url.Values
+	var swap map[string]any
+	jup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/quote":
+			quote = r.URL.Query()
+			w.Write([]byte(`{"outAmount":"123"}`))
+		case "/swap":
+			json.NewDecoder(r.Body).Decode(&swap)
+			json.NewEncoder(w).Encode(map[string]string{"swapTransaction": base64.StdEncoding.EncodeToString(unsignedTx(kp.Public))})
+		}
+	}))
+	defer jup.Close()
+	l := &Live{Key: kp, TradeURL: pp.URL, JupiterURL: jup.URL, SlippagePct: 15, PriorityFee: 0.0005, HTTP: http.DefaultClient}
+	owner := kp.PublicBase58()
+	ctx := context.Background()
+
+	if _, err := l.build(ctx, Order{Mint: "MINT", Side: "buy", SolIn: 0.25, State: curve.State{VSol: 30, VTokens: 1e9, AMM: true}}, owner); err != nil {
+		t.Fatal(err)
+	}
+	if pumpportal.Load() != 0 || quote.Get("outputMint") != "MINT" || quote.Get("amount") != "250000000" || quote.Get("slippageBps") != "1500" ||
+		swap["userPublicKey"] != owner || swap["quoteResponse"] == nil {
+		t.Fatalf("graduated buy: pumpportal %d quote %v swap %v", pumpportal.Load(), quote, swap)
+	}
+	if !l.jupiter(Order{Side: "buy", State: curve.State{AMM: true}}) || l.jupiter(Order{Side: "sell", State: curve.State{AMM: true}}) {
+		t.Fatal("only graduated buys use jupiter")
+	}
+	for _, o := range []Order{
+		{Mint: "MINT", Side: "buy", SolIn: 0.25, State: curve.State{VSol: 30, VTokens: 1e9}},              // bonding curve buy
+		{Mint: "MINT", Side: "sell", SellPct: 100, State: curve.State{VSol: 30, VTokens: 1e9, AMM: true}}, // graduated sell
+	} {
+		if _, err := l.build(ctx, o, owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pumpportal.Load() != 2 {
+		t.Fatalf("pumpportal builds %d, want 2", pumpportal.Load())
 	}
 }
