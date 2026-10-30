@@ -511,7 +511,10 @@ func (s *Server) walletDetail(w http.ResponseWriter, r *http.Request) {
 			myRots = append(myRots, x)
 		}
 	}
-	cmpRows, cmpSum := compare.Build(trades, ps, toks, fees, now)
+	// Them vs us needs every trade on each token, not just the latest page: with only
+	// the last 200 a token's early buys drop out and its sells look like a huge return.
+	cmpTrades, _ := s.Store.ListTargetTrades(ctx, store.TradeFilter{Wallet: addr, Since: now.AddDate(0, 0, -30)})
+	cmpRows, cmpSum := compare.Build(cmpTrades, ps, toks, fees, now)
 	writeJSON(w, 200, map[string]any{"wallet": wl, "scores": mine, "score_history": history, "equity": curves,
 		"trades": rows, "positions": ps, "rotations": myRots, "compare": cmpRows, "compare_summary": cmpSum})
 }
