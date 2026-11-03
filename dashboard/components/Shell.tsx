@@ -9,6 +9,7 @@ const groups: { title: string; links: { href: string; label: string; hint: strin
   { title: "Results", links: [
     { href: "/", label: "Overview", hint: "How the paper copies are doing today" },
     { href: "/wallets", label: "Wallets", hint: "Every wallet we copy, ranked" },
+    { href: "/calendar", label: "P&L calendar", hint: "Paper profit by day" },
     { href: "/trades", label: "Trade log", hint: "Their trades and our copies" },
   ] },
   { title: "Find & trade", links: [

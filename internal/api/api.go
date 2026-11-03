@@ -56,6 +56,7 @@ func (s *Server) RunHub(ctx context.Context) error {
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/overview", s.overview)
+	m.HandleFunc("GET /api/calendar", s.calendar)
 	m.HandleFunc("GET /api/wallets", s.wallets)
 	m.HandleFunc("POST /api/wallets", s.addWallet)
 	m.HandleFunc("GET /api/wallets/{addr}", s.walletDetail)
@@ -230,6 +231,83 @@ func filterOpen(ps []model.LivePosition) []model.LivePosition {
 		}
 	}
 	return out
+}
+
+type calDay struct {
+	Date   string  `json:"date"`
+	PnlUSD float64 `json:"pnl_usd"`
+	Closed int     `json:"closed"`
+	Won    int     `json:"won"`
+}
+
+type calWallet struct {
+	Address string  `json:"address"`
+	PnlUSD  float64 `json:"pnl_usd"`
+	Copies  int     `json:"copies"`
+}
+
+// calendar is realized paper P&L per day: every copy at one delay, of every wallet
+// we ever copied (dropped ones too, so past days don't change), counted on the
+// day it closed in the alert time zone. Open copies are reported apart.
+func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	delay := qInt(r, "delay", s.Cfg.RotationDelayS)
+	wallet := r.URL.Query().Get("wallet")
+	loc, err := time.LoadLocation(s.Cfg.AlertTZ)
+	if err != nil {
+		loc = time.UTC
+	}
+	now := s.Now()
+	ps, err := s.Store.ListSimPositions(ctx, store.SimFilter{Wallet: wallet, DelayS: delay, Since: now.AddDate(-1, 0, 0)})
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	fees := sim.FeesFrom(s.Cfg)
+	toks := s.tokenCache(ctx)
+	days := map[string]*calDay{}
+	wallets := map[string]*calWallet{}
+	openUSD, open := 0.0, 0
+	for _, p := range ps {
+		o := score.Value(p, toks(p.Mint), fees, now)
+		cw := wallets[p.Wallet]
+		if cw == nil {
+			cw = &calWallet{Address: p.Wallet}
+			wallets[p.Wallet] = cw
+		}
+		cw.PnlUSD += o.PnlUSD
+		cw.Copies++
+		if !o.Closed {
+			openUSD += o.PnlUSD
+			open++
+			continue
+		}
+		k := o.At.In(loc).Format("2006-01-02")
+		d := days[k]
+		if d == nil {
+			d = &calDay{Date: k}
+			days[k] = d
+		}
+		d.PnlUSD += o.PnlUSD
+		d.Closed++
+		if o.PnlUSD > 0 {
+			d.Won++
+		}
+	}
+	outDays := make([]calDay, 0, len(days))
+	for _, d := range days {
+		d.PnlUSD = round2(d.PnlUSD)
+		outDays = append(outDays, *d)
+	}
+	sort.Slice(outDays, func(i, j int) bool { return outDays[i].Date < outDays[j].Date })
+	outWallets := make([]calWallet, 0, len(wallets))
+	for _, cw := range wallets {
+		cw.PnlUSD = round2(cw.PnlUSD)
+		outWallets = append(outWallets, *cw)
+	}
+	sort.Slice(outWallets, func(i, j int) bool { return outWallets[i].PnlUSD > outWallets[j].PnlUSD })
+	writeJSON(w, 200, map[string]any{"tz": loc.String(), "delay": delay, "today": now.In(loc).Format("2006-01-02"),
+		"days": outDays, "open_usd": round2(openUSD), "open": open, "wallets": outWallets})
 }
 
 func dailySeries(outs []score.Outcome) []point {

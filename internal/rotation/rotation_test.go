@@ -145,3 +145,14 @@ func TestApplyLogsRotations(t *testing.T) {
 		t.Fatalf("rotations %+v", rs)
 	}
 }
+
+// A wallet put back on the bench gets a fresh week before the inactivity drop.
+func TestPruneCountsReBenchAsActivity(t *testing.T) {
+	now := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
+	old := now.AddDate(0, 0, -60)
+	r := Rules{DropInactiveDays: 7, DropBadPnlUSD: -50, DropBadMinTrades: 15}
+	ws := []model.Wallet{{Address: "back", Status: model.StatusBench, AddedAt: old, LastTradeAt: &old, StatusAt: now.AddDate(0, 0, -1)}}
+	if cs := r.Prune(ws, Index(nil), now); len(cs) != 0 {
+		t.Fatalf("dropped a just re-added wallet: %+v", cs)
+	}
+}

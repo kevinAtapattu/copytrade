@@ -134,6 +134,23 @@ button.btn.small { padding: 3px 8px; font-size: 12px; }
 .glossary > div { display: grid; grid-template-columns: 190px 1fr; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--grid); }
 .glossary dt { font-weight: 600; }
 .glossary dd { margin: 0; color: var(--text-secondary); line-height: 1.55; }
+/* P&L calendar: 7 day columns plus a week total. */
+.cal-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.cal-head h3 { margin: 0; min-width: 150px; text-align: center; }
+.cal { display: grid; gap: 4px; }
+.cal-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(0, 0.9fr); gap: 4px; }
+.cal-dow > div { color: var(--text-muted); font-size: 12px; padding: 0 6px; }
+.cal-cell { background: var(--surface-2); border-radius: 6px; min-height: 76px; padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cal-cell.blank { background: transparent; }
+.cal-cell.future { opacity: 0.45; }
+.cal-cell.today { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cal-day { color: var(--text-muted); font-size: 12px; }
+.cal-pnl { font-weight: 600; font-variant-numeric: tabular-nums; margin-top: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-n { color: var(--text-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-pnl .compact { display: none; }
+.cal-week { background: transparent; justify-content: center; align-items: flex-end; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 13px; }
+.cal-dow .cal-week { text-align: right; }
+
 @media (max-width: 760px) {
   .shell { flex-direction: column; }
   /* Phone: brand + mode on one line, then the pages as one scrollable row. */
@@ -150,4 +167,10 @@ button.btn.small { padding: 3px 8px; font-size: 12px; }
   .hide-sm { display: none; }
   .two { grid-template-columns: 1fr; }
   .glossary > div { grid-template-columns: 1fr; gap: 2px; }
+  .cal-row { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+  .cal-week, .cal-n { display: none; }
+  .cal-cell { min-height: 52px; padding: 4px; }
+  .cal-pnl { font-size: 11px; }
+  .cal-pnl .full { display: none; }
+  .cal-pnl .compact { display: inline; }
 }

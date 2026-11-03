@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -55,6 +56,32 @@ func main() {
 		}
 		return m
 	})
+
+	// Keep the watched set full from the leaderboard, so wallets dropped for losing
+	// are replaced with new ones to try.
+	if a.Cfg.LeaderboardURL != "" && a.Cfg.WatchTarget > 0 {
+		target := min(a.Cfg.WatchTarget, a.Cfg.BenchMax+a.Cfg.LiveMax)
+		go func() {
+			hc := &http.Client{Timeout: 30 * time.Second}
+			for {
+				ls, err := jobs.FetchKolscan(a.Ctx, hc, a.Cfg.LeaderboardURL)
+				if err == nil {
+					var added []string
+					added, err = jobs.Refill(a.Ctx, a.Store, a.Bus, ls, target, a.Cfg.RetryDroppedAfter, time.Now())
+					slog.Info("leaderboard", "traders", len(ls), "added", len(added), "target", target)
+				}
+				if err != nil {
+					slog.Warn("leaderboard", "err", err)
+					jobs.EmitError(a.Ctx, a.Bus, "discovery", fmt.Errorf("leaderboard: %w", err))
+				}
+				select {
+				case <-a.Ctx.Done():
+					return
+				case <-time.After(a.Cfg.LeaderboardEvery):
+				}
+			}
+		}()
+	}
 
 	t := time.NewTicker(a.Cfg.DiscoveryInterval)
 	defer t.Stop()

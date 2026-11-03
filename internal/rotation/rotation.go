@@ -139,6 +139,9 @@ func (r Rules) Prune(wallets []model.Wallet, ix ScoreIndex, now time.Time) []Cha
 			continue
 		}
 		last := w.AddedAt
+		if w.StatusAt.After(last) {
+			last = w.StatusAt // re-added to the bench: a fresh week to trade
+		}
 		if w.LastTradeAt != nil && w.LastTradeAt.After(last) {
 			last = *w.LastTradeAt
 		}

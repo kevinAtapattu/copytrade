@@ -62,14 +62,20 @@ type Config struct {
 	DropBadMinTrades int
 
 	// Discovery
-	DiscoveryInterval       time.Duration
-	DiscoveryMult           float64
-	DiscoveryEarlyMult      float64
-	DiscoveryExitMult       float64
-	DiscoveryMinHits        int
-	DiscoveryMaxPages       int
-	DiscoveryMaxTx          int
-	DiscoveryRPCDailyMax    int64
+	DiscoveryInterval    time.Duration
+	DiscoveryMult        float64
+	DiscoveryEarlyMult   float64
+	DiscoveryExitMult    float64
+	DiscoveryMinHits     int
+	DiscoveryMaxPages    int
+	DiscoveryMaxTx       int
+	DiscoveryRPCDailyMax int64
+	// Leaderboard: keep WatchTarget wallets watched by adding traders from a public
+	// leaderboard page every LeaderboardEvery. "" URL turns it off.
+	LeaderboardURL          string
+	LeaderboardEvery        time.Duration
+	WatchTarget             int
+	RetryDroppedAfter       time.Duration
 	DiscoverySeedMigrations bool // scan tokens that completed their curve, found via PumpPortal's free migration stream
 
 	// API
@@ -158,7 +164,11 @@ func Load() Config {
 		DiscoveryMinHits:        integer("DISCOVERY_MIN_HITS", 2),
 		DiscoveryMaxPages:       integer("DISCOVERY_MAX_PAGES", 15),
 		DiscoveryMaxTx:          integer("DISCOVERY_MAX_TX", 400),
-		DiscoveryRPCDailyMax:    int64(integer("DISCOVERY_RPC_DAILY_MAX", 15000)),
+		DiscoveryRPCDailyMax:    int64(integer("DISCOVERY_RPC_DAILY_MAX", 5000)),
+		LeaderboardURL:          str("LEADERBOARD_URL", "https://kolscan.io/leaderboard"),
+		LeaderboardEvery:        dur("LEADERBOARD_EVERY", 3*time.Hour),
+		WatchTarget:             integer("WATCH_TARGET", 50),
+		RetryDroppedAfter:       dur("RETRY_DROPPED_AFTER", 30*24*time.Hour),
 		DiscoverySeedMigrations: boolean("DISCOVERY_SEED_MIGRATIONS", true),
 
 		APIAddr: str("API_ADDR", ":8080"),

@@ -15,9 +15,10 @@ const (
 
 // Wallet sources.
 const (
-	SourceSeed      = "seed"
-	SourceManual    = "manual"
-	SourceDiscovery = "discovery"
+	SourceSeed        = "seed"
+	SourceManual      = "manual"
+	SourceDiscovery   = "discovery"
+	SourceLeaderboard = "leaderboard" // a public leaderboard (Kolscan)
 )
 
 // Trade sides.
