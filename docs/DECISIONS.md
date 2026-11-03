@@ -250,6 +250,10 @@ An on-chain scan of every tracked wallet's last 26 hours: every tx that changed 
 - **Budget:** discovery's own lookups cut from 15k to 5k a day (`DISCOVERY_RPC_DAILY_MAX`) to leave room for 50 tracked wallets on the free Helius plan. `RPC_DAILY_MAX` still pauses price marks (never fills) if tracking runs over.
 - **Caveat:** Kolscan lists well-known traders, who are copied by many bots that act faster than our 2 seconds. Their copyability may be worse than their leaderboard numbers; the paper copies measure exactly that.
 
-## P&L calendar
+## P&L calendar: copying only the best, us vs them
 
-- New page: paper profit per day at a chosen delay, counted on the day each copy closed (alert time zone, Eastern), for all wallets or one. Dropped wallets' copies are included so past days never change. Open copies are shown apart, not on a day. Week totals on the right, month total, green days, best and worst day, and a list view with exact amounts. API: `GET /api/calendar?delay=&wallet=`.
+- **What a day shows:** what copying only our best wallets would have made, not everyone (every wallet together is red almost every day). Each day has **us** (our $25 copies at the chosen delay, after fees) and **them** (the same trades for the wallet itself, scaled to our size: their return on the token times our cost). Counted on the day each copy closed, Eastern time. Clicking a day lists the wallets copied, their result vs ours, and each token.
+- **Picks, no hindsight:** each morning the top N (3 or 5) wallets are picked from copies that had closed in the previous 14 days: at least 5 closed copies, median hold of a minute or more, ranked by copy profit without the wallet's single best trade. Only copies opened that day by a picked wallet count. Picking from today's ranking and replaying the past would look great and mean nothing.
+- **Only wallets making us money (default on):** a wallet is picked only if that ranking number is above 0. On days nobody qualifies we copy nobody, so the day is $0. With this on, no wallet has qualified yet (Nov 3), so the strategy sat out every day; copying the top 3 anyway (switch off) would have made -$547 over the same days. "Everyone" and one-wallet views are still there.
+- **Snipers are never picked:** 5KhMUK held a median 6 seconds; 2 seconds late our buys averaged 41% above his, so his "them" was +$146 on a token where we made +$31. Not copyable at our speed.
+- API: `GET /api/calendar?delay=&n=3|5&strict=0|1&pick=all&wallet=&date=`.
