@@ -257,3 +257,10 @@ An on-chain scan of every tracked wallet's last 26 hours: every tx that changed 
 - **Only wallets making us money (default on):** a wallet is picked only if that ranking number is above 0. On days nobody qualifies we copy nobody, so the day is $0. With this on, no wallet has qualified yet (Nov 3), so the strategy sat out every day; copying the top 3 anyway (switch off) would have made -$547 over the same days. "Everyone" and one-wallet views are still there.
 - **Snipers are never picked:** 5KhMUK held a median 6 seconds; 2 seconds late our buys averaged 41% above his, so his "them" was +$146 on a token where we made +$31. Not copyable at our speed.
 - API: `GET /api/calendar?delay=&n=3|5&strict=0|1&pick=all&wallet=&date=`.
+
+## P&L calendar: "Best traders" is the default view (2026-11-05)
+
+Kevin wanted the calendar to show closed profit from our best traders each day, with a tab per trader when clicking a day.
+- "Best traders" = every wallet whose copies that closed in the last 14 days made us money (closed only, no minimum count). The same set applies to every day, so older days use today's knowledge. The page says so. The no-hindsight Top 3 / Top 5 morning picks stay as other options.
+- A day shows only copies that closed that day. Open copies count on the day they close.
+- Clicking a day shows one tab per trader with closes that day, ranked by our result, #1 open first.

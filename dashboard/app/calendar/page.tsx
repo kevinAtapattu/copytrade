@@ -1,5 +1,5 @@
 "use client";
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Err, Seg, Stat } from "@/components/ui";
 import { useApi, useWalletNames } from "@/lib/api";
 import { dur, pnlClass, short, usd } from "@/lib/format";
@@ -10,6 +10,7 @@ type Day = { date: string; us_usd: number; them_usd: number; closed: number; won
 type Calendar = {
   tz: string; delay: number; pick: string; n: number; today: string; days: Day[]; open_usd: number; open: number;
   picks_today: string[] | null; wallets?: { address: string; pnl_usd: number }[]; day?: Day; strict?: boolean; loose_us_usd?: number;
+  winners?: { address: string; us_usd: number; closed: number }[];
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -18,11 +19,11 @@ const key = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 
 export default function CalendarPage() {
   const [delay, setDelay] = useState(2);
-  const [mode, setMode] = useState<"3" | "5" | "all">("3");
+  const [mode, setMode] = useState<"win" | "3" | "5" | "all">("win");
   const [wallet, setWallet] = useState("");
   const [sel, setSel] = useState<string | null>(null);
   const [strict, setStrict] = useState(true);
-  const q = `calendar?delay=${delay}${wallet ? `&wallet=${wallet}` : mode === "all" ? "&pick=all" : `&n=${mode}${strict ? "" : "&strict=0"}`}`;
+  const q = `calendar?delay=${delay}${wallet ? `&wallet=${wallet}` : mode === "all" ? "&pick=all" : mode === "win" ? "&pick=winners" : `&n=${mode}${strict ? "" : "&strict=0"}`}`;
   const { data, error } = useApi<Calendar>(q, 60000);
   const { data: detail } = useApi<Calendar>(sel ? `${q}&date=${sel}` : null, 60000);
   const { names } = useWalletNames();
@@ -52,7 +53,8 @@ export default function CalendarPage() {
   };
   const monthName = new Date(Date.UTC(cur.y, cur.m, 1)).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
   const tz = data?.tz === "America/Toronto" || data?.tz === "America/New_York" ? "Eastern" : data?.tz ?? "";
-  const best_ = !wallet && mode !== "all";
+  const best_ = !wallet && (mode === "3" || mode === "5");
+  const win = !wallet && mode === "win";
 
   return (
     <>
@@ -60,7 +62,11 @@ export default function CalendarPage() {
         <div>
           <h2>P&amp;L calendar</h2>
           <div className="sub">
-            {wallet ? <>Every copy of {name(wallet)}</> : best_ ? (
+            {wallet ? <>Every copy of {name(wallet)}</> : win ? (
+              <>Our best traders: every wallet whose copies that closed in the last 14 days made us money. Each day shows
+                what their copies that closed that day made, win or lose. Open copies count once they close. These are
+                today&apos;s best traders, so older days show how they did then, not what we&apos;d have known to copy.</>
+            ) : best_ ? (
               <>Copying only our best {mode} wallets. Each morning we pick up to {mode} with the best copy results over the
                 previous 14 days: at least 5 closed copies, held a minute or more (snipers can&apos;t be copied 2s late),
                 {strict ? " and making us money even without their single best trade" : " ranked without their single best trade, even if losing"}.
@@ -72,7 +78,11 @@ export default function CalendarPage() {
         </div>
         <div className="row">
           <Seg value={wallet ? ("" as const) : mode} onChange={(v) => { if (v) { setWallet(""); setMode(v); } }}
-            options={[{ v: "3", label: "Top 3" }, { v: "5", label: "Top 5" }, { v: "all", label: "Everyone" }]} />
+            options={[
+              { v: "win", label: "Best traders", title: "Wallets whose copies made us money over the last 14 days" },
+              { v: "3", label: "Top 3", title: "Top 3 picked each morning from what was known then (no hindsight)" },
+              { v: "5", label: "Top 5", title: "Top 5 picked each morning from what was known then (no hindsight)" },
+              { v: "all", label: "Everyone" }]} />
           <select value={wallet} onChange={(e) => setWallet(e.target.value)} aria-label="One wallet">
             <option value="">One wallet...</option>
             {(data?.wallets ?? []).map((w) => <option key={w.address} value={w.address}>{name(w.address)} ({usd(w.pnl_usd, true)})</option>)}
@@ -93,7 +103,10 @@ export default function CalendarPage() {
         <Stat label="Green days" value={monthDays.length ? `${green} of ${monthDays.length}` : "-"} hint="days we ended up" />
         <Stat label="Best day" value={best ? usd(best.us_usd, true) : "-"} tone={best?.us_usd} hint={best ? fmtDay(best.date) : " "} />
         <Stat label="Worst day" value={worst ? usd(worst.us_usd, true) : "-"} tone={worst?.us_usd} hint={worst ? fmtDay(worst.date) : " "} />
-        {best_ ? (
+        {win ? (
+          <Stat label="Best traders" value={data?.winners?.length ? `${data.winners.length} wallet${data.winners.length > 1 ? "s" : ""}` : "none yet"}
+            hint={(data?.winners ?? []).slice(0, 3).map((w) => `${name(w.address)} ${usd(w.us_usd, true)}`).join(", ") || " "} />
+        ) : best_ ? (
           <Stat label="Copying today" value={data?.picks_today?.length ? data.picks_today.map(name).join(", ") : "nobody qualifies"}
             hint={`${data?.open ?? 0} open copies, ${usd(data?.open_usd, true)} now`} />
         ) : (
@@ -116,6 +129,9 @@ export default function CalendarPage() {
             {" "}(untick &quot;Only wallets making us money&quot; to see those days). The 48 leaderboard wallets added Nov 3 start qualifying once
             they have 5 closed copies.
           </div>
+        )}
+        {win && data && (data.winners ?? []).length === 0 && (
+          <div className="note" role="status">No wallet we watch has closed copies that made us money in the last 14 days yet.</div>
         )}
         <div className="cal" role="grid" aria-label={`P&L for ${monthName}`}>
           <div className="cal-row cal-dow" role="row">
@@ -154,7 +170,7 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      {sel && <DayDetail date={sel} day={detail?.day} name={name} bestMode={best_} n={mode} onClose={() => setSel(null)} />}
+      {sel && <DayDetail key={`${sel}${q}`} date={sel} day={detail?.day} name={name} bestMode={best_} n={mode} onClose={() => setSel(null)} />}
     </>
   );
 }
@@ -162,10 +178,11 @@ export default function CalendarPage() {
 function DayDetail({ date, day, name, bestMode, n, onClose }: {
   date: string; day?: Day; name: (a: string) => string; bestMode: boolean; n: string; onClose: () => void;
 }) {
-  const [open, setOpen] = useState<string | null>(null);
   const ws = day?.wallets ?? [];
+  const [tab, setTab] = useState(0);
   const us = ws.reduce((s, w) => s + w.us_usd, 0);
   const them = ws.reduce((s, w) => s + w.them_usd, 0);
+  const w = ws[Math.min(tab, ws.length - 1)];
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <div className="cal-head" style={{ justifyContent: "space-between" }}>
@@ -179,35 +196,40 @@ function DayDetail({ date, day, name, bestMode, n, onClose }: {
         </div>
       )}
       {!day ? <div className="empty">Loading...</div> : ws.length === 0 ? <div className="empty">No copies closed this day.</div> : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Wallet</th><th className="num">Closed</th><th className="num">Won</th><th className="num">Them</th><th className="num">Us</th><th className="num hide-sm" title="Negative: copying cost us this much vs the wallet itself">Us minus them</th></tr></thead>
-            <tbody>
-              {ws.map((w) => (
-                <Fragment key={w.address}>
-                  <tr className="clickable" onClick={() => setOpen(open === w.address ? null : w.address)}>
-                    <td><span aria-hidden>{open === w.address ? "▾" : "▸"}</span> {name(w.address)}</td>
-                    <td className="num">{w.closed}</td>
-                    <td className="num">{w.won}</td>
-                    <td className={`num ${pnlClass(w.them_usd)}`}>{usd(w.them_usd, true)}</td>
-                    <td className={`num ${pnlClass(w.us_usd)}`}>{usd(w.us_usd, true)}</td>
-                    <td className="num hide-sm muted">{usd(w.us_usd - w.them_usd, true)}</td>
-                  </tr>
-                  {open === w.address && (w.copies ?? []).map((c) => (
-                    <tr key={c.mint + c.opened_at} className="sub-row">
-                      <td><a className="mono" href={`https://pump.fun/coin/${c.mint}`} target="_blank" rel="noreferrer">{short(c.mint)}</a>
-                        <span className="muted"> held {c.closed_at ? dur((Date.parse(c.closed_at) - Date.parse(c.opened_at)) / 1000) : "-"}</span></td>
-                      <td className="num muted" colSpan={2}>{usd(c.cost_usd)} in</td>
+        <>
+          <div className="tabs" role="tablist" aria-label="Traders this day">
+            {ws.map((x, i) => (
+              <button key={x.address} type="button" role="tab" aria-selected={x === w} className={x === w ? "on" : ""} onClick={() => setTab(i)}>
+                <span className="muted">#{i + 1}</span> {name(x.address)} <span className={pnlClass(x.us_usd)}>{usd(x.us_usd, true)}</span>
+              </button>
+            ))}
+          </div>
+          <div role="tabpanel">
+            <div className="grid stats" style={{ marginBottom: 12 }}>
+              <Stat label="Us" value={usd(w.us_usd, true)} tone={w.us_usd} hint={`our $25 copies`} />
+              <Stat label="Them" value={usd(w.them_usd, true)} tone={w.them_usd} hint="their trades, scaled to $25" />
+              <Stat label="Us minus them" value={usd(w.us_usd - w.them_usd, true)} hint="what copying late cost or gained" />
+              <Stat label="Closed" value={`${w.won} of ${w.closed} won`} hint={w.address.slice(0, 4) + ".." + w.address.slice(-4)} />
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Token</th><th className="num">Held</th><th className="num hide-sm">In</th><th className="num">Them</th><th className="num">Us</th><th className="num hide-sm">Us minus them</th></tr></thead>
+                <tbody>
+                  {(w.copies ?? []).map((c) => (
+                    <tr key={c.mint + c.opened_at}>
+                      <td><a className="mono" href={`https://pump.fun/coin/${c.mint}`} target="_blank" rel="noreferrer">{short(c.mint)}</a></td>
+                      <td className="num muted">{c.closed_at ? dur((Date.parse(c.closed_at) - Date.parse(c.opened_at)) / 1000) : "-"}</td>
+                      <td className="num hide-sm muted">{usd(c.cost_usd)}</td>
                       <td className={`num ${pnlClass(c.them_usd)}`}>{c.them_usd == null ? "-" : usd(c.them_usd, true)}</td>
                       <td className={`num ${pnlClass(c.us_usd)}`}>{usd(c.us_usd, true)}</td>
                       <td className="num hide-sm muted">{c.them_usd == null ? "-" : usd(c.us_usd - c.them_usd, true)}</td>
                     </tr>
                   ))}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

@@ -69,7 +69,7 @@ type calInput struct {
 	their func(wallet, mint string) (float64, bool)
 	loc   *time.Location
 	now   time.Time
-	pick  string // "best" | "all"
+	pick  string // "winners" | "best" | "all"
 	n     int
 	// positiveOnly picks only wallets whose copies made money (best trade aside);
 	// on a day nobody qualifies, we copy nobody.
@@ -134,11 +134,61 @@ func picksFor(day string, in calInput) []string {
 	return out
 }
 
+// winnerWallet is one of our best traders: its closed copies made us money.
+type winnerWallet struct {
+	Address string  `json:"address"`
+	UsUSD   float64 `json:"us_usd"`
+	Closed  int     `json:"closed"`
+}
+
+// winners are the wallets whose copies that closed in the lookback up to now made
+// us money, best first. Unlike picksFor this uses today's results for every day,
+// so past days show the wallets we'd copy now, not what we'd have known then.
+func winners(in calInput) []winnerWallet {
+	by := map[string]*winnerWallet{}
+	for i, p := range in.ps {
+		o := in.outs[i]
+		if !o.Closed || o.At.Before(in.now.Add(-pickLookback)) {
+			continue
+		}
+		w := by[p.Wallet]
+		if w == nil {
+			w = &winnerWallet{Address: p.Wallet}
+			by[p.Wallet] = w
+		}
+		w.UsUSD += o.PnlUSD
+		w.Closed++
+	}
+	out := []winnerWallet{}
+	for _, w := range by {
+		if w.UsUSD > 0 {
+			w.UsUSD = round2(w.UsUSD)
+			out = append(out, *w)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UsUSD != out[j].UsUSD {
+			return out[i].UsUSD > out[j].UsUSD
+		}
+		return out[i].Address < out[j].Address
+	})
+	return out
+}
+
 func buildCalendar(in calInput) calResult {
 	res := calResult{Days: []calDay{}, byDate: map[string]map[string]*calWallet{}}
 	picks := map[string]map[string]bool{} // open day -> picked wallets
 	pickList := map[string][]string{}
+	won := map[string]bool{}
+	if in.pick == "winners" {
+		for _, w := range winners(in) {
+			won[w.Address] = true
+		}
+	}
 	taken := func(p model.SimPosition) bool {
+		if in.pick == "winners" {
+			return won[p.Wallet]
+		}
 		if in.pick != "best" {
 			return true
 		}
@@ -205,7 +255,7 @@ func buildCalendar(in calInput) calResult {
 	return res
 }
 
-// calendar: ?delay=2&pick=best|all&n=3&wallet=ADDR&date=YYYY-MM-DD (date adds that
+// calendar: ?delay=2&pick=winners|best|all&n=3&wallet=ADDR&date=YYYY-MM-DD (date adds that
 // day's per-wallet, per-token breakdown and the morning's picks).
 func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -213,8 +263,11 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	delay := qInt(r, "delay", s.Cfg.RotationDelayS)
 	wallet := q.Get("wallet")
 	pick := "best"
-	if q.Get("pick") == "all" || wallet != "" {
+	switch {
+	case q.Get("pick") == "all" || wallet != "":
 		pick = "all" // one wallet: all its copies
+	case q.Get("pick") == "winners":
+		pick = "winners"
 	}
 	n := min(max(qInt(r, "n", 3), 1), 20)
 	strict := q.Get("strict") != "0" // only wallets whose copies made money
@@ -269,6 +322,9 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"tz": loc.String(), "delay": delay, "pick": pick, "n": n, "today": dayOf(now, loc),
 		"days": res.Days, "open_usd": res.OpenUSD, "open": res.Open,
 		"strict": strict, "picks_today": picksFor(dayOf(now, loc), in)}
+	if pick == "winners" {
+		out["winners"] = winners(in)
+	}
 	if pick == "best" && strict {
 		// What copying the top N anyway (least bad, even if losing) would have made.
 		loose := in

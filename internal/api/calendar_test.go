@@ -82,3 +82,36 @@ func TestPicksSkipLosersAndSnipers(t *testing.T) {
 		t.Fatalf("least-bad picks %v", got)
 	}
 }
+
+// Winners mode copies every wallet whose copies closed in the last 14 days made
+// money, on every day, and counts only closed copies.
+func TestCalendarWinnersShowsProfitableWalletsClosedCopies(t *testing.T) {
+	loc := time.UTC
+	day := func(d, h int) time.Time { return time.Date(2026, 11, d, h, 0, 0, 0, loc) }
+	var ps []model.SimPosition
+	var outs []score.Outcome
+	add := func(w string, open, close time.Time, pnl float64, closed bool) {
+		c := close
+		ps = append(ps, model.SimPosition{Wallet: w, OpenedAt: open, ClosedAt: &c, CostSol: 0.25, SolUSD: 100})
+		outs = append(outs, score.Outcome{Closed: closed, At: close, PnlUSD: pnl})
+	}
+	add("pain", day(3, 10), day(4, 10), 73, true)   // one big win, closed the next day
+	add("pain", day(4, 12), day(5, 10), -20, false) // still open: not on the calendar
+	add("pros", day(4, 10), day(4, 11), -5, true)   // a losing day...
+	add("pros", day(5, 10), day(5, 11), 15, true)   // ...but up overall
+	add("loser", day(4, 10), day(4, 11), 40, true)  // a good day...
+	add("loser", day(5, 10), day(5, 11), -60, true) // ...but down overall: not shown
+	add("old", day(1, 10), day(1, 11), 0, true)
+	in := calInput{ps: ps, outs: outs, their: func(string, string) (float64, bool) { return 0, false },
+		loc: loc, now: day(6, 0), pick: "winners"}
+	if ws := winners(in); len(ws) != 2 || ws[0].Address != "pain" || ws[1].Address != "pros" {
+		t.Fatalf("winners %+v", ws)
+	}
+	res := buildCalendar(in)
+	if len(res.Days) != 2 || res.Days[0].Date != "2026-11-04" || res.Days[0].UsUSD != 68 || res.Days[1].UsUSD != 15 {
+		t.Fatalf("days %+v", res.Days)
+	}
+	if res.Open != 1 || res.OpenUSD != -20 {
+		t.Fatalf("open %d %v", res.Open, res.OpenUSD)
+	}
+}
