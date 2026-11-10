@@ -264,3 +264,7 @@ Kevin wanted the calendar to show closed profit from our best traders each day, 
 - "Best traders" = every wallet whose copies that closed in the last 14 days made us money (closed only, no minimum count). The same set applies to every day, so older days use today's knowledge. The page says so. The no-hindsight Top 3 / Top 5 morning picks stay as other options.
 - A day shows only copies that closed that day. Open copies count on the day they close.
 - Clicking a day shows one tab per trader with closes that day, ranked by our result, #1 open first.
+
+## Two live wallets buying the same token (2026-11-09)
+
+Copies are kept per wallet and token, so two live wallets buying the same token gives us two copies in one token balance. Sells used to send "X% of our balance", which would also sell the other wallet's copy. Now, when another copy holds the same token, a sell sends that copy's exact token count (rounded down to 6 decimals). The last copy left still sells 100%, so no dust is left. tradecheck dry-runs an exact-count sell on both pools; it passes.

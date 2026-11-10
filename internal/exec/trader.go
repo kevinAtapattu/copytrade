@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -38,7 +39,7 @@ type Order struct {
 	Side    string  // buy | sell
 	SolIn   float64 // buys
 	Tokens  float64 // sells: token amount we expect to sell
-	SellPct float64 // sells: percent of our balance (0-100)
+	SellPct float64 // sells: percent of our balance (0-100); 0 sells exactly Tokens
 	State   curve.State
 	At      time.Time // event time (paper fills use this)
 }
@@ -107,6 +108,9 @@ func (l *Live) request(o Order) tradeReq {
 		PriorityFee: l.PriorityFee, Pool: "auto"} // auto: still works after the token migrates off the curve
 	if o.Side == "buy" {
 		r.Amount, r.DenominatedInSol = round(o.SolIn, 6), "true"
+	} else if o.SellPct <= 0 {
+		// Exact count, rounded down to pump.fun's 6 decimals so we never ask for more than we hold.
+		r.Amount, r.DenominatedInSol = strconv.FormatFloat(math.Floor(o.Tokens*1e6)/1e6, 'f', 6, 64), "false"
 	} else {
 		pct := o.SellPct
 		if pct >= 99.9 {

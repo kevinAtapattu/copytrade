@@ -377,3 +377,40 @@ func TestLiveBuysGraduatedTokensThroughJupiter(t *testing.T) {
 		t.Fatalf("pumpportal builds %d, want 2", pumpportal.Load())
 	}
 }
+
+type recorder struct {
+	Paper
+	orders []Order
+}
+
+func (r *recorder) Execute(ctx context.Context, o Order) (Result, error) {
+	r.orders = append(r.orders, o)
+	return r.Paper.Execute(ctx, o)
+}
+
+// Two live wallets buy the same token: our balance holds both copies, so a sell
+// for one must be its exact token count, not a percent that would sell both.
+func TestSharedTokenSellsExactAmount(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	ctx := context.Background()
+	st.AddWallet(ctx, model.Wallet{Address: "LIVE2", Status: model.StatusLive})
+	rec := &recorder{Paper: ex.Trader.(Paper)}
+	ex.Trader = rec
+	if err := ex.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ex.HandleTrade(ctx, trd("a1", "LIVE", "M1", "buy", 32, 0, true, 1e6, 1e6))
+	ex.HandleTrade(ctx, trd("b1", "LIVE2", "M1", "buy", 33, time.Second, true, 1e6, 1e6))
+	ex.HandleTrade(ctx, trd("a2", "LIVE", "M1", "sell", 40, time.Minute, true, 1e6, 0))
+	last := rec.orders[len(rec.orders)-1]
+	if last.Side != model.SideSell || last.SellPct != 0 || last.Tokens <= 0 {
+		t.Fatalf("shared sell %+v", last)
+	}
+	ex.HandleTrade(ctx, trd("b2", "LIVE2", "M1", "sell", 41, 2*time.Minute, true, 1e6, 0))
+	if last := rec.orders[len(rec.orders)-1]; last.SellPct != 100 {
+		t.Fatalf("last copy should sell 100%% of the balance: %+v", last)
+	}
+	if r := (&Live{}).request(Order{Side: "sell", Tokens: 1234.5678919}); r.Amount != "1234.567891" || r.DenominatedInSol != "false" {
+		t.Fatalf("exact sell request %+v", r)
+	}
+}

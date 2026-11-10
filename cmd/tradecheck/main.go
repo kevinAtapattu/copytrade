@@ -9,6 +9,7 @@
 //     is never saved or funded, so that check stops at "no SOL")
 //   - the same buy built for the tracked wallet, which has SOL, so it must succeed
 //   - a 100% sell built for that wallet, which holds the token, so it must succeed
+//   - a sell of an exact token count (half its buy), the form used when two copies share a token
 //   - reading a real fill: the wallet's own buy tx, read the way the executor reads ours
 package main
 
@@ -42,7 +43,7 @@ func check(name string, ok bool, detail string) {
 
 type pick struct {
 	wallet, mint, pool, buySig string
-	buySol, solUSD             float64
+	buySol, buyTokens, solUSD  float64
 }
 
 func main() {
@@ -101,9 +102,14 @@ func main() {
 		check(pool+fmt.Sprintf(": $%.0f buy as a funded wallet", c.ExecSizeUSD), err == nil && r.Err == "", result2(r, err))
 		r, err = l.DryRun(ctx, sell, p.wallet)
 		check(pool+": sell 100% as a holder", err == nil && r.Err == "", result2(r, err))
+		// When two copies share a token we sell one copy's exact token count.
+		half := exec.Order{Mint: p.mint, Side: model.SideSell, Tokens: p.buyTokens / 2}
+		r, err = l.DryRun(ctx, half, p.wallet)
+		check(pool+fmt.Sprintf(": sell exactly %.0f tokens as a holder", half.Tokens), err == nil && r.Err == "", result2(r, err))
 
 		bc, err := rpc.GetBalanceChange(ctx, p.buySig, p.wallet, p.mint)
-		ok := err == nil && math.Abs(-bc.SolDelta-p.buySol) <= p.buySol*0.05 && bc.TokenDelta > 0
+		// On-chain SOL out includes the wallet's own priority and bot fees, which the stream leaves out.
+		ok := err == nil && math.Abs(-bc.SolDelta-p.buySol) <= p.buySol*0.15 && bc.TokenDelta > 0
 		check(pool+": read a real fill", ok, fmt.Sprintf("their buy %s: %.4f SOL out, %.0f tokens in (recorded %.4f SOL) %v",
 			p.buySig[:8], -bc.SolDelta, bc.TokenDelta, p.buySol, errStr(err)))
 		fmt.Println()
@@ -118,12 +124,12 @@ func main() {
 // find picks the newest token on pool that a tracked wallet bought and still holds.
 func find(ctx context.Context, db *pgx.Conn, pool string) (pick, error) {
 	var p pick
-	err := db.QueryRow(ctx, `select p.wallet, p.mint, t.pool, b.signature, b.sol_amount, p.sol_usd
+	err := db.QueryRow(ctx, `select p.wallet, p.mint, t.pool, b.signature, b.sol_amount, b.token_amount, p.sol_usd
 		from sim_positions p join tokens t on t.mint = p.mint
-		join lateral (select signature, sol_amount from target_trades where wallet = p.wallet and mint = p.mint and side = 'buy'
+		join lateral (select signature, sol_amount, token_amount from target_trades where wallet = p.wallet and mint = p.mint and side = 'buy'
 			and signature not like '%:%' order by received_at desc limit 1) b on true
 		where p.status = 'open' and p.delay_s = 2 and t.pool = $1
-		order by p.opened_at desc limit 1`, pool).Scan(&p.wallet, &p.mint, &p.pool, &p.buySig, &p.buySol, &p.solUSD)
+		order by p.opened_at desc limit 1`, pool).Scan(&p.wallet, &p.mint, &p.pool, &p.buySig, &p.buySol, &p.buyTokens, &p.solUSD)
 	return p, err
 }
 

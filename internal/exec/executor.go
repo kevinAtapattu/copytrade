@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +55,21 @@ func New(t Trader, st store.Store, b bus.Bus, p price.Source, r Risk) *Executor 
 }
 
 func pkey(wallet, mint string) string { return wallet + "|" + mint }
+
+// sharedLocked: another copy (open or being bought) holds mint besides key k.
+func (e *Executor) sharedLocked(k, mint string) bool {
+	for o, p := range e.positions {
+		if o != k && p.Mint == mint && p.TokensHeld > 0 {
+			return true
+		}
+	}
+	for o := range e.inflight {
+		if o != k && strings.HasSuffix(o, "|"+mint) {
+			return true
+		}
+	}
+	return false
+}
 
 // Load restores open positions and today's realized PnL for this mode.
 func (e *Executor) Load(ctx context.Context, now time.Time) error {
@@ -260,6 +276,13 @@ func (e *Executor) sell(ctx context.Context, p *model.LivePosition, pct float64,
 	if pct >= 99.9 {
 		tokens = p.TokensHeld
 	}
+	// Two wallets we copy can buy the same token; our balance then holds both
+	// copies. A percent of the balance would sell the other copy too, so sell
+	// this copy's exact token count instead.
+	sellPct := pct
+	if e.sharedLocked(k, p.Mint) {
+		sellPct = 0
+	}
 	e.mu.Unlock()
 	if tokens <= 0 {
 		return
@@ -268,7 +291,7 @@ func (e *Executor) sell(ctx context.Context, p *model.LivePosition, pct float64,
 	if e.Sync {
 		sent = t.ReceivedAt
 	}
-	res, err := e.Trader.Execute(ctx, Order{Mint: p.Mint, Side: model.SideSell, Tokens: tokens, SellPct: pct, State: st, At: t.ReceivedAt})
+	res, err := e.Trader.Execute(ctx, Order{Mint: p.Mint, Side: model.SideSell, Tokens: tokens, SellPct: sellPct, State: st, At: t.ReceivedAt})
 	f := model.LiveFill{ID: sim.ID(e.Trader.Mode(), t.Signature, p.ID, reason), PositionID: p.ID, Mode: e.Trader.Mode(),
 		TargetSig: t.Signature, Wallet: p.Wallet, Mint: p.Mint, Side: model.SideSell, Reason: reason, TargetAt: t.ReceivedAt,
 		SentAt: sent, Signature: res.Signature, Attempts: res.Attempts, SolUSD: p.SolUSD}
