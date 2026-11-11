@@ -29,7 +29,9 @@ export default function CalendarPage() {
   const { names } = useWalletNames();
   const name = (a: string) => names.get(a) ?? short(a);
 
-  const today = data?.today ?? new Date().toISOString().slice(0, 10);
+  // Today comes only from the API: a date computed here would be baked in when the
+  // page is pre-rendered at build time, and hydration keeps those stale attributes.
+  const today = data?.today ?? "";
   const [month, setMonth] = useState<{ y: number; m: number } | null>(null);
   const cur = month ?? { y: Number(today.slice(0, 4)), m: Number(today.slice(5, 7)) - 1 };
   const byDate = useMemo(() => new Map((data?.days ?? []).map((d) => [d.date, d])), [data]);
@@ -55,6 +57,16 @@ export default function CalendarPage() {
   const tz = data?.tz === "America/Toronto" || data?.tz === "America/New_York" ? "Eastern" : data?.tz ?? "";
   const best_ = !wallet && (mode === "3" || mode === "5");
   const win = !wallet && mode === "win";
+
+  if (!data) {
+    return (
+      <>
+        <div className="page-head"><div><h2>P&amp;L calendar</h2></div></div>
+        <Err error={error} />
+        {!error && <div className="empty">Loading...</div>}
+      </>
+    );
+  }
 
   return (
     <>
