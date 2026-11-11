@@ -19,6 +19,9 @@ func TestBuildCompareTheirReturnVsOurs(t *testing.T) {
 		{Mint: "B", Side: model.SideSell, SolAmount: 0.5, TokenAmount: 1000, Pool: "pump", ReceivedAt: now.Add(-4 * time.Minute)},
 		{Mint: "C", Side: model.SideBuy, SolAmount: 1, TokenAmount: 1000, Pool: "pump-amm", ReceivedAt: now}, // not copyable, ignored
 		{Mint: "D", Side: model.SideSell, SolAmount: 1, TokenAmount: 1000, Pool: "pump", ReceivedAt: now},    // bought before tracking
+		// E: held a bag before tracking, dust buy, then sold the bag: not their return
+		{Mint: "E", Side: model.SideBuy, SolAmount: 0.0001, TokenAmount: 100, Pool: "pump", ReceivedAt: now.Add(-3 * time.Minute)},
+		{Mint: "E", Side: model.SideSell, SolAmount: 20, TokenAmount: 2e7, Pool: "pump", ReceivedAt: now.Add(-3 * time.Minute)},
 	}
 	ps := []model.SimPosition{
 		{Mint: "A", DelayS: 2, Status: model.PosClosed, ClosedAt: &closed, CostSol: 0.2, ProceedsSol: 0.3, SolUSD: 125},

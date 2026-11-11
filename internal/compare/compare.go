@@ -101,8 +101,10 @@ func Build(trades []model.Trade, ps []model.SimPosition, toks func(string) *mode
 	}
 	var rows []Row
 	for mint, a := range by {
-		if a.solIn <= 0 || a.tokIn <= 0 {
-			continue // bought before we tracked them
+		if a.solIn <= 0 || a.tokIn <= 0 || a.tokOut > a.tokIn*1.05 {
+			// Bought before we tracked them, or sold more than we saw them buy (they
+			// held a bag already; 3BLj sold 29M tokens after buying 238, which read as +10,000,000%).
+			continue
 		}
 		held := math.Max(a.tokIn-a.tokOut, 0)
 		mark := 0.0

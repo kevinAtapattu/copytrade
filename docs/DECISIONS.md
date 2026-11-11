@@ -268,3 +268,7 @@ Kevin wanted the calendar to show closed profit from our best traders each day, 
 ## Two live wallets buying the same token (2026-11-09)
 
 Copies are kept per wallet and token, so two live wallets buying the same token gives us two copies in one token balance. Sells used to send "X% of our balance", which would also sell the other wallet's copy. Now, when another copy holds the same token, a sell sends that copy's exact token count (rounded down to 6 decimals). The last copy left still sells 100%, so no dust is left. tradecheck dry-runs an exact-count sell on both pools; it passes.
+
+## "Them" skips tokens they held before we tracked them (2026-11-11)
+
+A wallet that already held a bag, made a dust buy, then sold the bag read as +10,000,000% (3BLj on 4yxnt3: 238 tokens bought, 29M sold), which put the Everyone calendar's "them" at $2.6M. compare.Build now skips a token when they sold more than 5% beyond what we saw them buy, the same as tokens bought before tracking.
