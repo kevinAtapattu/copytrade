@@ -164,12 +164,16 @@ Never run two ingest instances against the same API key. PumpPortal bans clients
 
 ## Going live, step by step
 
+The calendar is a simulation, not your wallet. Paper and sim agree within about $1 for the same wallet and hours (same curve math and fees), but neither models real landing delay (paper fills ~0.1-0.4s after detection; a real tx lands 1s+ later), failed or expired txs, sandwich bots, token account rent (~0.002 SOL per new token, not reclaimed), or SOL/USD moving your balance. The default "Best traders" view also picks wallets with hindsight. A small live pilot is the only way to measure the real gap.
+
 1. Do Prereqs, fill `PUMPPORTAL_API_KEY` and `SOLANA_RPC_URL` (Helius), add wallets, then `go run ./cmd/livecheck` to confirm both work. Then `make up`. Check Health: PumpPortal "connected", data mode "snapshot", budget counting up, RPC calls counting up.
-2. Let it paper-track for 2+ weeks. The scorer promotes wallets to live only when they are positive over 14d and 30d at +2s, not driven by one trade, with 10+ trades and under 25% drawdown. Meanwhile the executor paper-trades live wallets (`LIVE_TRADING=false`).
-3. Go/no-go (from PLAN.md): 2-3 wallets positive for 2+ weeks at +2s after costs, and the Executor page's "gap vs sim" is small.
-4. Create a fresh hot wallet (Phantom or `solana-keygen new`), fund it with the $500 play money plus about 0.05 SOL for fees. Put its secret key in `TRADER_PRIVATE_KEY` and set a paid `SOLANA_RPC_URL`.
-5. Set `LIVE_TRADING=true`, then `docker compose up -d executor`. The executor logs `LIVE TRADING ENABLED` with the wallet address, and the dashboard shows mode LIVE.
-6. Watch the first few fills on the Executor page. The kill switch stops new buys instantly; exits keep working.
+2. Let it paper-track. The executor paper-trades live wallets (`LIVE_TRADING=false`); the Executor page shows paper P&L and "gap vs sim" (paper fill price vs the +2s sim fill for the same trade).
+3. Go/no-go for full size (from PLAN.md): 2-3 wallets positive for 2+ weeks at +2s after costs, and gap vs sim small. A pilot can start earlier, sized as money spent to learn the gap.
+4. Pilot settings in `.env`: one manually picked wallet, `LIVE_MAX=0` (rotation can't auto-promote anything onto real money; manual picks stay), `EXEC_SIZE_USD=10`, `MAX_OPEN_POSITIONS=2`, `DAILY_LOSS_LIMIT_USD=20`, `JITO_TIP_SOL=0.0001`. Restart scorer and executor.
+5. Create a fresh hot wallet (Phantom or `solana-keygen new`), never your main one. Fund it with about $60 of SOL (2 positions x $10, a day's loss limit, and fees/rent headroom). Paste its secret key into `TRADER_PRIVATE_KEY` in `.env` yourself and use a paid or Helius `SOLANA_RPC_URL`. Run `go run ./cmd/tradecheck` (dry run, sends nothing).
+6. Set `LIVE_TRADING=true`, then `docker compose up -d executor`. The executor logs `LIVE TRADING ENABLED` with the wallet address, and the dashboard and alerts show LIVE.
+7. Watch the first fills on the Executor page and check Solscan: the wallet's SOL change should match the position P&L. The kill switch stops new buys instantly; exits keep working.
+8. After ~30 live round trips, compare: live gap vs sim (target within ~2%), failed tx rate (target under 5%), wallet SOL change vs dashboard P&L. If it holds, raise `EXEC_SIZE_USD` to 25 and add a second wallet. If not, set `LIVE_TRADING=false`.
 
 ## KEYS NEEDED
 

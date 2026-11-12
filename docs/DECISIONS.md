@@ -286,3 +286,6 @@ Dior was demoted 3.5h after "Make live" (score dipped to -0.50), and Swan flippe
 - A wallet set live by hand is not demoted for 24h, unless its drawdown reaches MAX_DRAWDOWN.
 - A demoted wallet is not auto-promoted again for 24h.
 - A manual pick can go over LIVE_MAX; rotation only fills free slots.
+
+## Going live: pilot first
+Paper and the +2s sim agree within about $1 on the same trades (nad +$29.78 paper vs +$30.69 sim over 19 trades), but that is one model agreeing with another. Real landing delay, failed txs, sandwiching, token account rent and SOL/USD are unmodeled, and the go/no-go bar (2-3 wallets positive 2+ weeks) isn't met yet. So the plan is a small pilot: one manual wallet, LIVE_MAX=0 so rotation can't put an auto-picked wallet on real money, $10 size, 2 open max, $20 daily loss limit, ~$60 in the wallet, judged on gap vs sim and failed tx rate after ~30 round trips.
