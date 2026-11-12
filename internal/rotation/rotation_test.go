@@ -13,7 +13,7 @@ import (
 var now = time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
 
 var rules = Rules{DelayS: 2, LiveMax: 2, BenchMax: 3, MaxDrawdown: 0.25, PromoteMinDays: 14, PromoteMinTrades: 10,
-	DropInactiveDays: 7, DropBadPnlUSD: -50, DropBadMinTrades: 15}
+	DropInactiveDays: 7, DropBadPnlUSD: -50, DropBadMinTrades: 15, ManualHold: 24 * time.Hour, Cooldown: 24 * time.Hour}
 
 func good(w string, score float64) []model.Score {
 	return []model.Score{
@@ -80,19 +80,46 @@ func TestDecideFillsSlotsByScore(t *testing.T) {
 	ss = append(ss, good("B1", 1)...)
 	ss = append(ss, good("B2", 9)...)
 	ss = append(ss, good("B3", 4)...)
-	ch := rules.Decide(ws, Index(ss))
+	ch := rules.Decide(ws, Index(ss), now)
 	if len(ch) != 1 || ch[0].Wallet != "B2" || ch[0].To != model.StatusLive {
 		t.Fatalf("expected only B2 promoted into the one free slot: %+v", ch)
 	}
 	// L1 goes negative: demoted, and two slots open
 	ss[0].PnlUSD = -5
-	ch = rules.Decide(ws, Index(ss))
+	ch = rules.Decide(ws, Index(ss), now)
 	got := map[string]string{}
 	for _, c := range ch {
 		got[c.Wallet] = c.To
 	}
 	if got["L1"] != model.StatusBench || got["B2"] != model.StatusLive || got["B3"] != model.StatusLive || len(got) != 3 {
 		t.Fatalf("unexpected changes %v", got)
+	}
+}
+
+// A wallet set live by hand stays live for a day even if its score dips (but not
+// past the drawdown limit), and a demoted wallet isn't promoted again for a day.
+func TestManualHoldAndCooldown(t *testing.T) {
+	man := wallet("MAN", model.StatusLive)
+	man.Reason, man.StatusAt = "manual: set to live from dashboard", now.Add(-3*time.Hour)
+	back := wallet("BACK", model.StatusBench)
+	back.Reason, back.StatusAt = "demoted: 14d score -0.79 negative at +2s", now.Add(-4*time.Hour)
+	ss := append(good("MAN", 2), good("BACK", 5)...)
+	ss[0].Score = -0.5
+	if ch := rules.Decide([]model.Wallet{man, back}, Index(ss), now); len(ch) != 0 {
+		t.Fatalf("manual pick held and demoted wallet cooling down, want no changes: %+v", ch)
+	}
+	ss[0].MaxDrawdown = 0.3
+	if ch := rules.Decide([]model.Wallet{man}, Index(ss), now); len(ch) != 1 || ch[0].To != model.StatusBench {
+		t.Fatalf("drawdown past the limit still demotes a manual pick: %+v", ch)
+	}
+	man.StatusAt, back.StatusAt = now.Add(-25*time.Hour), now.Add(-25*time.Hour)
+	ss[0].MaxDrawdown = 0
+	got := map[string]string{}
+	for _, c := range rules.Decide([]model.Wallet{man, back}, Index(ss), now) {
+		got[c.Wallet] = c.To
+	}
+	if got["MAN"] != model.StatusBench || got["BACK"] != model.StatusLive {
+		t.Fatalf("after a day both rules lapse: %v", got)
 	}
 }
 

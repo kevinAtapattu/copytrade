@@ -153,7 +153,10 @@ func TestEndToEndReplay(t *testing.T) {
 
 func TestAPIOnReplayData(t *testing.T) {
 	st, data, _, c := replay(t)
-	srv := httptest.NewServer(api.New(st, bus.NewMemory(), nil, c).Handler())
+	s := api.New(st, bus.NewMemory(), nil, c)
+	// The replay covers Sep 1-22; pages look back 30-45 days from "now".
+	s.Now = func() time.Time { return time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC) }
+	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	get := func(path string, out any) {
 		t.Helper()

@@ -1,9 +1,7 @@
-// Command alerter sends Discord/Telegram alerts in three tiers so a large wallet
-// list never means a ping per trade (see internal/alert/policy.go):
-//   - immediate: executor closes, real-money fills, live promotions/demotions,
-//     spending and safety stops, errors (deduped, capped per hour)
-//   - roll-up: every closed paper copy, batched once per ALERT_ROLLUP_EVERY
-//   - digest: a daily summary at ALERT_DIGEST_HOUR in ALERT_TZ
+// Command alerter sends one Discord/Telegram message an hour about the copies
+// the executor made of our live wallets: P&L this hour, P&L today, then a note
+// per trade (see internal/alert/policy.go). Quiet hours send nothing. The only
+// other alerts are safety stops (kill switch, daily loss limit).
 package main
 
 import (
@@ -22,10 +20,7 @@ import (
 	"copytrade/internal/model"
 )
 
-const (
-	keyRollupLast = "alert_rollup_last" // RFC3339 end of the last roll-up window
-	keyDigestLast = "alert_digest_last" // local date of the last digest
-)
+const keyRollupLast = "alert_rollup_last" // RFC3339 end of the last hourly window
 
 func main() {
 	a := app.Start("alerter")
@@ -86,13 +81,6 @@ func main() {
 		}
 	}()
 
-	policy := fmt.Sprintf("copytrade alerts on. Instant: executor closes, real-money trades, live promotions/demotions, spending and safety stops, errors (max %d/hour). "+
-		"Paper copies at +%ds: a net summary every %s. Daily summary at %d:00 %s.", c.AlertMaxPerHour, c.AlertSimDelay, c.AlertRollupEvery, c.AlertDigestHour, c.AlertTZ)
-	if c.AlertRollupEvery <= 0 {
-		policy += " (roll-ups off)"
-	}
-	send(policy)
-
 	var mu sync.Mutex
 	lim := &alert.Limiter{MaxPerHour: c.AlertMaxPerHour}
 
@@ -107,47 +95,22 @@ func main() {
 			if now.Sub(last) < c.AlertRollupEvery {
 				return
 			}
-			lines, err := alert.CopyLines(a.Ctx, a.Store, c.AlertSimDelay, last, now)
+			lines, mode, err := alert.ExecLines(a.Ctx, a.Store, last, now)
 			if err != nil {
-				slog.Warn("roll-up", "err", err)
+				slog.Warn("hourly", "err", err)
 				return
 			}
 			local := now.In(loc)
 			midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-			day, err := alert.CopyLines(a.Ctx, a.Store, c.AlertSimDelay, midnight, now)
+			day, _, err := alert.ExecLines(a.Ctx, a.Store, midnight, now)
 			if err != nil {
-				slog.Warn("roll-up (today)", "err", err)
+				slog.Warn("hourly (today)", "err", err)
 				return
 			}
-			mu.Lock()
-			sup := lim.Suppressed
-			lim.Suppressed = 0
-			mu.Unlock()
-			label := fmt.Sprintf("Paper copies (+%ds), last %s", c.AlertSimDelay, window(now.Sub(last)))
-			send(alert.Rollup(label, lines, day, sup)) // "" when nothing closed: no message
+			send(alert.Hourly(mode, lines, day)) // "" when nothing closed: no message
 			setSetting(a.Ctx, a, keyRollupLast, now.Format(time.RFC3339Nano))
 		})
 	}
-	if c.AlertDigestHour >= 0 {
-		go loop(a.Ctx, time.Minute, func(now time.Time) {
-			local := now.In(loc)
-			today := local.Format("2006-01-02")
-			if local.Hour() != c.AlertDigestHour {
-				return
-			}
-			if v, _, _ := a.Store.GetSetting(a.Ctx, keyDigestLast); v == today {
-				return
-			}
-			text, err := alert.Digest(a.Ctx, a.Store, c.AlertSimDelay, now)
-			if err != nil {
-				slog.Warn("digest", "err", err)
-				return
-			}
-			send(text)
-			setSetting(a.Ctx, a, keyDigestLast, today)
-		})
-	}
-
 	err = a.Bus.Subscribe(a.Ctx, bus.StreamEvents, "alerter", "alert-1", func(ctx context.Context, b []byte) error {
 		var ev model.Event
 		if err := json.Unmarshal(b, &ev); err != nil {
@@ -158,7 +121,7 @@ func main() {
 			return nil
 		}
 		if time.Since(ev.At) > time.Hour {
-			return nil // backlog after downtime: the roll-up/digest cover it
+			return nil // stale after downtime
 		}
 		mu.Lock()
 		ok := lim.Allow(d, time.Now())
@@ -167,14 +130,7 @@ func main() {
 			held.Add(1)
 			return nil
 		}
-		text := alert.Format(ev)
-		if ev.Kind == "exec_closed" {
-			var p model.LivePosition
-			if raw, err := json.Marshal(ev.Data); err == nil && json.Unmarshal(raw, &p) == nil {
-				text = alert.ExecClosedText(ctx, a.Store, p, c.AlertSimDelay, time.Now())
-			}
-		}
-		send(text)
+		send(alert.Format(ev))
 		return nil
 	})
 	if err != nil && a.Ctx.Err() == nil {

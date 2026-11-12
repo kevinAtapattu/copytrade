@@ -28,7 +28,7 @@ func ScoreAndRotate(ctx context.Context, st store.Store, b bus.Bus, c config.Con
 		return scores, nil, err
 	}
 	rules := rotation.FromConfig(c)
-	done, err := rotation.Apply(ctx, st, rules.Decide(wallets, rotation.Index(scores)), now)
+	done, err := rotation.Apply(ctx, st, rules.Decide(wallets, rotation.Index(scores), now), now)
 	EmitRotations(ctx, b, "scorer", done, now)
 	return scores, done, err
 }

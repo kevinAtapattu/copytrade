@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"copytrade/internal/config"
@@ -22,6 +23,12 @@ type Rules struct {
 	DropInactiveDays float64
 	DropBadPnlUSD    float64 // 30d sim PnL at or below this drops a bench wallet...
 	DropBadMinTrades int     // ...once it has this many positions
+	// ManualHold keeps a wallet set live by hand live this long, unless its
+	// drawdown hits MaxDrawdown (Dior was demoted 3.5h after "Make live").
+	ManualHold time.Duration
+	// Cooldown stops a demoted wallet being promoted again this soon (Swan's score
+	// hovered at 0 and it flipped live/bench 9 times in a day).
+	Cooldown time.Duration
 }
 
 // Change is one decided status change.
@@ -88,7 +95,7 @@ func (r Rules) PromoteBlock(s14, s30 model.Score) string {
 
 // Decide computes promotions and demotions. Demotions first, then fill free
 // live slots with the best eligible bench wallets.
-func (r Rules) Decide(wallets []model.Wallet, ix ScoreIndex) []Change {
+func (r Rules) Decide(wallets []model.Wallet, ix ScoreIndex, now time.Time) []Change {
 	var changes []Change
 	live := 0
 	type cand struct {
@@ -102,12 +109,19 @@ func (r Rules) Decide(wallets []model.Wallet, ix ScoreIndex) []Change {
 		s30, _ := ix.Get(w.Address, r.DelayS, 30)
 		switch w.Status {
 		case model.StatusLive:
-			if why := r.DemoteReason(s14); why != "" {
+			why := r.DemoteReason(s14)
+			if held := strings.HasPrefix(w.Reason, "manual:") && now.Sub(w.StatusAt) < r.ManualHold; held && s14.MaxDrawdown < r.MaxDrawdown {
+				why = ""
+			}
+			if why != "" {
 				changes = append(changes, Change{w.Address, model.StatusLive, model.StatusBench, "demoted: " + why})
 			} else {
 				live++
 			}
 		case model.StatusBench:
+			if strings.HasPrefix(w.Reason, "demoted:") && now.Sub(w.StatusAt) < r.Cooldown {
+				continue
+			}
 			if r.PromoteBlock(s14, s30) == "" {
 				cands = append(cands, cand{w, s14.Score, s14})
 			}
@@ -190,5 +204,6 @@ func FromConfig(c config.Config) Rules {
 		DelayS: c.RotationDelayS, LiveMax: c.LiveMax, BenchMax: c.BenchMax, MaxDrawdown: c.MaxDrawdown,
 		PromoteMinDays: c.PromoteMinDays, PromoteMinTrades: c.PromoteMinTrades,
 		DropInactiveDays: c.DropInactiveDays, DropBadPnlUSD: c.DropBadPnlUSD, DropBadMinTrades: c.DropBadMinTrades,
+		ManualHold: 24 * time.Hour, Cooldown: 24 * time.Hour,
 	}
 }

@@ -272,3 +272,17 @@ Copies are kept per wallet and token, so two live wallets buying the same token 
 ## "Them" skips tokens they held before we tracked them (2026-11-11)
 
 A wallet that already held a bag, made a dust buy, then sold the bag read as +10,000,000% (3BLj on 4yxnt3: 238 tokens bought, 29M sold), which put the Everyone calendar's "them" at $2.6M. compare.Build now skips a token when they sold more than 5% beyond what we saw them buy, the same as tokens bought before tracking.
+
+## Alerts: one hourly message (2026-11-12)
+
+Kevin asked for alerts that only say P&L this hour, P&L today, then trade notes.
+- The message is built from the executor's copies of live wallets (paper now, real money later), not from paper copies of all ~50 tracked wallets. That is what we'd actually trade.
+- Header shows [PAPER] or [LIVE]. Each trade note: wallet, token, our result, their result on the token, hold time. Quiet hours send nothing. Long hours are cut at Discord's limit with "...and N more".
+- Removed: per-close pings, the daily digest, the startup message, error alerts, promotion/demotion alerts, budget alerts. Kept: kill switch and daily loss limit, since they mean trading stopped.
+
+## Rotation: manual live picks hold a day, demoted wallets cool down a day (2026-11-12)
+
+Dior was demoted 3.5h after "Make live" (score dipped to -0.50), and Swan flipped live/bench 9 times in one day with its score hovering at 0.
+- A wallet set live by hand is not demoted for 24h, unless its drawdown reaches MAX_DRAWDOWN.
+- A demoted wallet is not auto-promoted again for 24h.
+- A manual pick can go over LIVE_MAX; rotation only fills free slots.
