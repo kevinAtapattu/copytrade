@@ -1,8 +1,10 @@
 "use client";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import LineChart, { mergeSeries } from "@/components/LineChart";
-import { Err, Stat, Table } from "@/components/ui";
+import { Calendar, DayDetail, MonthGrid, fmtDay, keptHint, monthTotals, useMonth } from "@/components/PnlCalendar";
+import { Err, Seg, Stat, Table } from "@/components/ui";
 import { CompareRow, CompareSummary, Point, Rotation, Score, SimPosition, SimTrade, Trade, Wallet, useApi } from "@/lib/api";
 import { ago, dur, num, pct, pnlClass, price, short, spct, time, usd } from "@/lib/format";
 import { STATUS_HELP, STATUS_LABEL } from "@/lib/glossary";
@@ -38,7 +40,8 @@ export default function WalletDetail() {
         </div>
       </div>
       <Err error={error} />
-      <div className="grid stats">
+      <WalletCalendar address={address} name={data?.wallet.label || short(address)} />
+      <div className="grid stats" style={{ marginTop: 14 }}>
         {DELAYS.map((d) => (
           <Stat key={d} label={`Paper PnL, 14 days, +${d}s`} value={usd(s(d, 14)?.pnl_usd, true)} tone={s(d, 14)?.pnl_usd}
             hint={`score ${num(s(d, 14)?.score)} · ex-best ${usd(s(d, 14)?.pnl_ex_best_usd, true)} · DD ${pct(s(d, 14)?.max_drawdown)}`} />
@@ -131,6 +134,48 @@ export default function WalletDetail() {
           ]} />
         </div>
       </div>
+    </>
+  );
+}
+
+// Their day-by-day P&L next to ours, the same numbers the P&L calendar shows for one wallet.
+function WalletCalendar({ address, name }: { address: string; name: string }) {
+  const [delay, setDelay] = useState(2);
+  const [sel, setSel] = useState<string | null>(null);
+  const q = `calendar?delay=${delay}&wallet=${address}`;
+  const { data, error } = useApi<Calendar>(q, 60000);
+  const { data: detail } = useApi<Calendar>(sel ? `${q}&date=${sel}` : null, 60000);
+  const today = data?.today ?? "";
+  const month = useMonth(today, data?.days);
+  const { us, them, green, best, worst } = monthTotals(month.monthDays);
+  const n = month.monthDays.length;
+  return (
+    <>
+      <div className="card">
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+          <div className="grow">
+            <h3>Daily P&amp;L: them vs us</h3>
+            <div className="sub">
+              <b>Them</b> is what {name}&apos;s own trades made, scaled to $25 a trade. <b>Us</b> is our $25 copy {delay}s late
+              after fees. Counted on the day each copy closed; open copies show up once they close. Click a day for its trades.
+            </div>
+          </div>
+          <Seg value={delay} onChange={(d) => { setDelay(d); setSel(null); }} options={[2, 10, 60].map((d) => ({ v: d, label: `+${d}s` }))} />
+        </div>
+        <Err error={error} />
+        {!data ? !error && <div className="empty">Loading...</div> : (
+          <>
+            <div className="grid stats" style={{ margin: "12px 0" }}>
+              <Stat label={`${month.name}, them`} value={usd(them, true)} tone={them} hint={n ? `on ${n} day${n > 1 ? "s" : ""} with closes` : "no closes yet"} />
+              <Stat label={`${month.name}, us`} value={usd(us, true)} tone={us} hint={n ? keptHint(us, them) : " "} />
+              <Stat label="Green days (us)" value={n ? `${green} of ${n}` : "-"} hint={best && worst ? `best ${usd(best.us_usd, true)} ${fmtDay(best.date)}, worst ${usd(worst.us_usd, true)}` : " "} />
+              <Stat label="Still open" value={usd(data.open_usd, true)} tone={data.open_usd} hint={`${data.open ?? 0} copies, not counted yet`} />
+            </div>
+            <MonthGrid days={data.days ?? []} today={today} month={month} sel={sel} onSelect={setSel} />
+          </>
+        )}
+      </div>
+      {sel && <DayDetail key={`${sel}${q}`} date={sel} day={detail?.day} name={() => name} onClose={() => setSel(null)} />}
     </>
   );
 }
