@@ -25,6 +25,7 @@ func main() {
 	trader := buildTrader(c.LiveTrading, a)
 	ex := exec.New(trader, a.Store, a.Bus, price.New(a.Ctx, c.SolUSDFixed, c.SolUSDFallback), exec.Risk{
 		SizeUSD: c.ExecSizeUSD, MaxOpenPositions: c.MaxOpenPositions, StopLossPct: c.StopLossPct, DailyLossUSD: c.DailyLossLimitUSD,
+		BuyMaxLag: c.ExecBuyMaxLag,
 	})
 	if err := ex.Load(a.Ctx, time.Now()); err != nil {
 		app.Fatal("load executor state", err)

@@ -11,6 +11,10 @@
 //   - a 100% sell built for that wallet, which holds the token, so it must succeed
 //   - a sell of an exact token count (half its buy), the form used when two copies share a token
 //   - reading a real fill: the wallet's own buy tx, read the way the executor reads ours
+//
+// Then the late-buy cancel: a buy signed with the short-lived blockhash a buy gets
+// for EXEC_BUY_MAX_LAG must be accepted, and that blockhash must really stop
+// working at the deadline.
 package main
 
 import (
@@ -31,7 +35,10 @@ import (
 	"copytrade/internal/solana"
 )
 
-var failed bool
+var (
+	failed bool
+	db0    *pgx.Conn
+)
 
 func check(name string, ok bool, detail string) {
 	mark := "PASS"
@@ -77,6 +84,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close(ctx)
+	db0 = db
 	for _, pool := range []string{"pump", model.PoolPumpSwap} {
 		p, err := find(ctx, db, pool)
 		if err != nil {
@@ -114,11 +122,53 @@ func main() {
 			p.buySig[:8], -bc.SolDelta, bc.TokenDelta, p.buySol, errStr(err)))
 		fmt.Println()
 	}
+	expiry(ctx, l, rpc, c, funded)
+
 	calls, _ := rpc.Calls()
 	fmt.Printf("RPC calls used: %d. Nothing was sent.\n", calls)
 	if failed {
 		os.Exit(1)
 	}
+}
+
+// expiry checks the late-buy cancel against the real chain.
+func expiry(ctx context.Context, l *exec.Live, rpc *solana.RPC, c config.Config, funded bool) {
+	fmt.Printf("late-buy cancel (EXEC_BUY_MAX_LAG=%s):\n", c.ExecBuyMaxLag)
+	p, err := find(ctx, db0, "pump")
+	if err != nil {
+		check("late buy: pick a token", false, err.Error())
+		return
+	}
+	now := time.Now()
+	buy := exec.Order{Mint: p.mint, Side: model.SideBuy, SolIn: c.ExecSizeUSD / p.solUSD, At: now, Deadline: now.Add(c.ExecBuyMaxLag)}
+	r, err := l.DryRun(ctx, buy, "")
+	accepted := err == nil && (r.Err == "" || (!funded && noFunds(r.Err)))
+	detail := result2(r, err)
+	if accepted && !funded {
+		detail = "accepted; stops at no SOL, as expected for an unfunded key"
+	}
+	check("late buy: tx with the short-lived blockhash is accepted", accepted, detail)
+
+	const blocks = 8 // ~3s
+	bh, err := rpc.BlockhashExpiringIn(ctx, blocks)
+	if err != nil {
+		check("late buy: short-lived blockhash", false, err.Error())
+		return
+	}
+	start := time.Now()
+	valid, err := rpc.IsBlockhashValid(ctx, bh)
+	check("late buy: blockhash usable now", err == nil && valid, fmt.Sprintf("valid=%v %s", valid, errStr(err)))
+	var gone time.Duration
+	for time.Since(start) < 20*time.Second {
+		time.Sleep(500 * time.Millisecond)
+		if v, err := rpc.IsBlockhashValid(ctx, bh); err == nil && !v {
+			gone = time.Since(start)
+			break
+		}
+	}
+	check("late buy: blockhash expires on time", gone > time.Second && gone < 8*time.Second,
+		fmt.Sprintf("asked for ~%.1fs of life, stopped working after %.1fs", float64(blocks)*0.4, gone.Seconds()))
+	fmt.Println()
 }
 
 // find picks the newest token on pool that a tracked wallet bought and still holds.

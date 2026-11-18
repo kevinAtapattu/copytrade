@@ -289,3 +289,9 @@ Dior was demoted 3.5h after "Make live" (score dipped to -0.50), and Swan flippe
 
 ## Going live: pilot first
 Paper and the +2s sim agree within about $1 on the same trades (nad +$29.78 paper vs +$30.69 sim over 19 trades), but that is one model agreeing with another. Real landing delay, failed txs, sandwiching, token account rent and SOL/USD are unmodeled, and the go/no-go bar (2-3 wallets positive 2+ weeks) isn't met yet. So the plan is a small pilot: one manual wallet, LIVE_MAX=0 so rotation can't put an auto-picked wallet on real money, $10 size, 2 open max, $20 daily loss limit, ~$60 in the wallet, judged on gap vs sim and failed tx rate after ~30 round trips.
+
+## Late buys cancel themselves (EXEC_BUY_MAX_LAG, default 10s)
+A Solana tx can't be recalled once sent; it can land any time until its blockhash is 150 blocks old (60-90s). A copy buy landing that late buys at a price unrelated to theirs. So a buy gets a deadline (their trade + EXEC_BUY_MAX_LAG): it isn't sent or retried past it, and it is signed with an older blockhash (getSlot + getBlock, fetched while PumpPortal builds the tx) chosen so the tx expires at the deadline. It lands in time or never. Measured on mainnet: asked for 3.2s of life, the blockhash stopped working after 2.1-3.2s, never later. Sells have no deadline: we always want out.
+
+## Jito bundle falls back to a normal tx
+With JITO_TIP_SOL set, PumpPortal's bundle endpoint returns 400 ("isCashbackCoin") for sells of bonding-curve tokens (Nov 2026); buys and PumpSwap sells work. A bundle it won't build is rebuilt as a normal tx and sent through our RPC, so exits never depend on Jito.

@@ -23,6 +23,7 @@ import (
 
 func testConfig() config.Config {
 	os.Clearenv() // defaults only, never a developer's .env
+	os.Setenv("NO_DOTENV", "1")
 	c := config.Load()
 	c.SolUSDFixed = 150
 	return c

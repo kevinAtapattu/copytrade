@@ -42,6 +42,8 @@ type Order struct {
 	SellPct float64 // sells: percent of our balance (0-100); 0 sells exactly Tokens
 	State   curve.State
 	At      time.Time // event time (paper fills use this)
+	// Deadline (buys): give up if the buy can't land by then. Zero = no limit.
+	Deadline time.Time
 }
 
 type Trader interface {
@@ -124,33 +126,42 @@ func (l *Live) request(o Order) tradeReq {
 	return r
 }
 
-// build asks for a fresh transaction (fresh blockhash every call) for owner.
-func (l *Live) build(ctx context.Context, o Order, owner string) (*solana.Tx, error) {
+// build asks for a fresh transaction (fresh blockhash every call) for owner, and
+// says whether to send it as a Jito bundle. PumpPortal can't build a bundle sell
+// for a token still on the bonding curve (400 "isCashbackCoin", seen Nov 2026), so
+// a bundle it won't build falls back to a normal tx sent through our RPC.
+func (l *Live) build(ctx context.Context, o Order, owner string) (*solana.Tx, bool, error) {
 	if l.jupiter(o) {
-		return l.buildJupiter(ctx, o, owner)
+		tx, err := l.buildJupiter(ctx, o, owner)
+		return tx, false, err
 	}
 	req := l.request(o)
 	req.PublicKey = owner
-	var body []byte
 	if l.JitoTipSol > 0 {
-		body, _ = json.Marshal([]tradeReq{req})
-	} else {
-		body, _ = json.Marshal(req)
+		body, _ := json.Marshal([]tradeReq{req})
+		data, err := l.call(ctx, http.MethodPost, l.TradeURL, body)
+		if err == nil {
+			var txs []string
+			if err := json.Unmarshal(data, &txs); err != nil || len(txs) == 0 {
+				return nil, false, fmt.Errorf("trade-local bundle response: %v", err)
+			}
+			raw, err := base58.Decode(txs[0])
+			if err != nil {
+				return nil, false, err
+			}
+			tx, err := solana.ParseTx(raw)
+			return tx, true, err
+		}
+		slog.Warn("jito bundle not built, sending a normal tx", "side", o.Side, "mint", o.Mint, "err", err)
+		req.PriorityFee = l.PriorityFee
 	}
+	body, _ := json.Marshal(req)
 	data, err := l.call(ctx, http.MethodPost, l.TradeURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("trade-local %w", err)
+		return nil, false, fmt.Errorf("trade-local %w", err)
 	}
-	if l.JitoTipSol > 0 {
-		var txs []string
-		if err := json.Unmarshal(data, &txs); err != nil || len(txs) == 0 {
-			return nil, fmt.Errorf("trade-local bundle response: %v", err)
-		}
-		if data, err = base58.Decode(txs[0]); err != nil {
-			return nil, err
-		}
-	}
-	return solana.ParseTx(data)
+	tx, err := solana.ParseTx(data)
+	return tx, false, err
 }
 
 func (l *Live) jupiter(o Order) bool { return o.Side == "buy" && o.State.AMM && l.JupiterURL != "" }
@@ -216,6 +227,12 @@ func (l *Live) Execute(ctx context.Context, o Order) (Result, error) {
 	var lastErr error
 	attempts := max(l.MaxAttempts, 1)
 	for i := 1; i <= attempts; i++ {
+		if late := tooLate(o, time.Now()); late != nil {
+			if i == 1 {
+				return Result{}, late
+			}
+			return Result{Attempts: i - 1}, fmt.Errorf("%w (after: %v)", late, lastErr)
+		}
 		res, err := l.once(ctx, o)
 		res.Attempts = i
 		if err == nil {
@@ -232,16 +249,58 @@ func (l *Live) Execute(ctx context.Context, o Order) (Result, error) {
 
 type fatalErr struct{ error }
 
+// ErrTooLate means a buy was given up because it could no longer land in time.
+var ErrTooLate = errors.New("too late")
+
+func tooLate(o Order, now time.Time) error {
+	if o.Deadline.IsZero() || now.Before(o.Deadline) {
+		return nil
+	}
+	return fmt.Errorf("%w: %.1fs after their trade, cancelled", ErrTooLate, now.Sub(o.At).Seconds())
+}
+
+// blocksLeft is how many ~0.4s blocks remain before the deadline (0 = no deadline).
+func blocksLeft(o Order, now time.Time) int {
+	if o.Deadline.IsZero() {
+		return 0
+	}
+	return int(o.Deadline.Sub(now) / (400 * time.Millisecond))
+}
+
 func (l *Live) once(ctx context.Context, o Order) (Result, error) {
-	tx, err := l.build(ctx, o, l.Key.PublicBase58())
+	// With a deadline, fetch an older blockhash (while PumpPortal builds the tx) so
+	// the tx expires at the deadline: it lands in time or never, not a minute late.
+	var bh string
+	bhDone := make(chan struct{})
+	if n := blocksLeft(o, time.Now()); n > 0 && n < solana.MaxBlockhashAge-10 {
+		go func() {
+			defer close(bhDone)
+			var err error
+			if bh, err = l.RPC.BlockhashExpiringIn(ctx, n); err != nil {
+				slog.Warn("no expiring blockhash; tx keeps its normal ~60s life", "err", err)
+			}
+		}()
+	} else {
+		close(bhDone)
+	}
+	tx, jito, err := l.build(ctx, o, l.Key.PublicBase58())
+	<-bhDone
 	if err != nil {
 		return Result{}, err
+	}
+	if bh != "" {
+		if err := tx.SetBlockhash(bh); err != nil {
+			return Result{}, err
+		}
+	}
+	if late := tooLate(o, time.Now()); late != nil {
+		return Result{}, &fatalErr{late}
 	}
 	if err := tx.Sign(l.Key); err != nil {
 		return Result{}, &fatalErr{err}
 	}
 	sig := tx.Signature()
-	if err := l.send(ctx, tx, l.JitoTipSol > 0 && !l.jupiter(o)); err != nil {
+	if err := l.send(ctx, tx, jito); err != nil {
 		var rej *solana.RPCError
 		if errors.As(err, &rej) {
 			return Result{Signature: sig}, err // node definitely rejected it: safe to rebuild now
@@ -250,7 +309,11 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 		// lands or its blockhash expires before allowing a retry.
 		slog.Warn("send failed, waiting for landing or expiry before retry", "sig", sig, "err", err)
 	}
-	landed, err := l.confirm(ctx, sig, tx.BlockhashBase58())
+	wait := l.ConfirmWait
+	if bh != "" {
+		wait = time.Until(o.Deadline) + 2*time.Second // the tx can't land after its blockhash expires
+	}
+	landed, err := l.confirm(ctx, sig, tx.BlockhashBase58(), wait)
 	if err != nil {
 		return Result{Signature: sig}, err
 	}
@@ -275,15 +338,25 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 // instead of sending it, so nothing is spent. With as == "" it is built for and
 // signed by our key (checks signing; fails on funds if the key has no SOL). With
 // another funded wallet's address it is built for that wallet and left unsigned,
-// which checks the trade itself would go through.
+// which checks the trade itself would go through. A buy with a Deadline gets the
+// short-lived blockhash Execute would give it.
 func (l *Live) DryRun(ctx context.Context, o Order, as string) (solana.SimResult, error) {
 	owner := as
 	if owner == "" {
 		owner = l.Key.PublicBase58()
 	}
-	tx, err := l.build(ctx, o, owner)
+	tx, _, err := l.build(ctx, o, owner)
 	if err != nil {
 		return solana.SimResult{}, err
+	}
+	if n := blocksLeft(o, time.Now()); n > 0 && as == "" { // a deadline: use the expiring blockhash, as Execute does
+		bh, err := l.RPC.BlockhashExpiringIn(ctx, n)
+		if err != nil {
+			return solana.SimResult{}, err
+		}
+		if err := tx.SetBlockhash(bh); err != nil {
+			return solana.SimResult{}, err
+		}
 	}
 	if as == "" {
 		if err := tx.Sign(l.Key); err != nil {
@@ -295,8 +368,7 @@ func (l *Live) DryRun(ctx context.Context, o Order, as string) (solana.SimResult
 
 // confirm polls until the tx is confirmed (true), failed on-chain (error), or
 // its blockhash is no longer valid and it never landed (false).
-func (l *Live) confirm(ctx context.Context, sig, blockhash string) (bool, error) {
-	wait := l.ConfirmWait
+func (l *Live) confirm(ctx context.Context, sig, blockhash string, wait time.Duration) (bool, error) {
 	if wait <= 0 {
 		wait = 30 * time.Second
 	}

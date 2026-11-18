@@ -22,6 +22,9 @@ type Risk struct {
 	MaxOpenPositions int
 	StopLossPct      float64
 	DailyLossUSD     float64
+	// BuyMaxLag: a buy that can't land within this long after their trade is
+	// cancelled, since we'd be buying at a price that no longer matches theirs. 0 = no limit.
+	BuyMaxLag time.Duration
 }
 
 type Executor struct {
@@ -243,7 +246,15 @@ func (e *Executor) buy(ctx context.Context, t model.Trade) {
 	if e.Sync {
 		sent = t.ReceivedAt
 	}
-	res, err := e.Trader.Execute(ctx, Order{Mint: t.Mint, Side: model.SideBuy, SolIn: e.Risk.SizeUSD / solUSD, State: st, At: t.ReceivedAt})
+	o := Order{Mint: t.Mint, Side: model.SideBuy, SolIn: e.Risk.SizeUSD / solUSD, State: st, At: t.ReceivedAt}
+	if e.Risk.BuyMaxLag > 0 && !e.Sync {
+		o.Deadline = t.ReceivedAt.Add(e.Risk.BuyMaxLag)
+		if late := tooLate(o, sent); late != nil {
+			e.reject(ctx, t, late.Error()) // queued behind other work for too long: nothing sent
+			return
+		}
+	}
+	res, err := e.Trader.Execute(ctx, o)
 	f := model.LiveFill{ID: sim.ID(e.Trader.Mode(), t.Signature, "buy"), Mode: e.Trader.Mode(), TargetSig: t.Signature,
 		Wallet: t.Trader, Mint: t.Mint, Side: model.SideBuy, Reason: "copy", TargetAt: t.ReceivedAt, SentAt: sent,
 		Signature: res.Signature, Attempts: res.Attempts, SolUSD: solUSD}

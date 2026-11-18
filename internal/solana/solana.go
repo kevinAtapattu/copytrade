@@ -72,6 +72,7 @@ type Tx struct {
 	RequiredSigs int
 	AccountKeys  [][]byte
 	Blockhash    []byte
+	bhOffset     int
 }
 
 func readShortVec(b []byte, off int) (int, int, error) {
@@ -128,11 +129,24 @@ func ParseTx(raw []byte) (*Tx, error) {
 		t.AccountKeys = append(t.AccountKeys, raw[off:off+32])
 		off += 32
 	}
-	t.Blockhash = raw[off : off+32]
+	t.bhOffset = off
+	t.Blockhash = t.Raw[off : off+32]
 	if t.RequiredSigs > t.NumSigs {
 		return nil, errors.New("tx: fewer signature slots than required signers")
 	}
 	return t, nil
+}
+
+// SetBlockhash swaps the tx's recent blockhash (base58) before signing. The tx
+// can only land while that blockhash is among the last 150 blocks, so an older
+// one makes the tx expire sooner.
+func (t *Tx) SetBlockhash(bh string) error {
+	b, err := base58.Decode(bh)
+	if err != nil || len(b) != 32 {
+		return fmt.Errorf("bad blockhash %q", bh)
+	}
+	copy(t.Raw[t.bhOffset:t.bhOffset+32], b)
+	return nil
 }
 
 // Message returns the bytes that get signed.
@@ -487,6 +501,40 @@ func (r *RPC) SignatureStatus(ctx context.Context, sig string) (SigStatus, error
 		st.Err = string(b)
 	}
 	return st, nil
+}
+
+// MaxBlockhashAge is how many blocks a blockhash stays usable for a new tx.
+const (
+	MaxBlockhashAge = 150
+	expiryFudge     = 3
+)
+
+// BlockhashExpiringIn returns the blockhash of a block old enough that a tx using
+// it can land for only about n more blocks (~0.4s each), never longer.
+func (r *RPC) BlockhashExpiringIn(ctx context.Context, n int) (string, error) {
+	if n <= 0 || n+expiryFudge >= MaxBlockhashAge {
+		return "", fmt.Errorf("blocks %d out of range", n)
+	}
+	var slot uint64
+	if err := r.call(ctx, "getSlot", []any{map[string]any{"commitment": "processed"}}, &slot); err != nil { // the tip, which validity is checked against
+		return "", err
+	}
+	// Measured on mainnet (Nov 2026): a blockhash stops working ~4 blocks sooner than
+	// 150 - age predicts. Make up 3 of them and keep one as margin, so it errs early.
+	back := uint64(MaxBlockhashAge - n - expiryFudge)
+	var lastErr error
+	for i := uint64(0); i < 4 && slot > back+i; i++ { // a skipped slot has no block: step further back
+		var b struct {
+			Blockhash string `json:"blockhash"`
+		}
+		err := r.call(ctx, "getBlock", []any{slot - back - i, map[string]any{"commitment": "confirmed",
+			"transactionDetails": "none", "rewards": false, "maxSupportedTransactionVersion": 0}}, &b)
+		if err == nil && b.Blockhash != "" {
+			return b.Blockhash, nil
+		}
+		lastErr = err
+	}
+	return "", fmt.Errorf("no block near slot %d: %v", slot-back, lastErr)
 }
 
 func (r *RPC) IsBlockhashValid(ctx context.Context, blockhash string) (bool, error) {

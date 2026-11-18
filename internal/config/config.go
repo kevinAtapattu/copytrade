@@ -94,6 +94,7 @@ type Config struct {
 	StopLossPct           float64
 	DailyLossLimitUSD     float64
 	ExecMaxAttempts       int
+	ExecBuyMaxLag         time.Duration
 	PumpPortalTradeURL    string
 	JupiterURL            string // builds buys on graduated tokens; "" = PumpPortal for all
 	PumpPortalLocalFeePct float64
@@ -183,6 +184,7 @@ func Load() Config {
 		StopLossPct:           flt("STOP_LOSS_PCT", 40),
 		DailyLossLimitUSD:     flt("DAILY_LOSS_LIMIT_USD", 75),
 		ExecMaxAttempts:       integer("EXEC_MAX_ATTEMPTS", 3),
+		ExecBuyMaxLag:         dur("EXEC_BUY_MAX_LAG", 10*time.Second),
 		PumpPortalTradeURL:    str("PUMPPORTAL_TRADE_URL", "https://pumpportal.fun/api/trade-local"),
 		JupiterURL:            str("JUPITER_URL", "https://lite-api.jup.ag/swap/v1"),
 		PumpPortalLocalFeePct: flt("PUMPPORTAL_LOCAL_FEE_PCT", 0.5),
@@ -197,6 +199,9 @@ func Load() Config {
 }
 
 func loadDotEnv() {
+	if os.Getenv("NO_DOTENV") != "" { // tests that want defaults only
+		return
+	}
 	dir, err := os.Getwd()
 	if err != nil {
 		return

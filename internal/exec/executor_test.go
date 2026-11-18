@@ -1,10 +1,12 @@
 package exec
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -355,7 +357,7 @@ func TestLiveBuysGraduatedTokensThroughJupiter(t *testing.T) {
 	owner := kp.PublicBase58()
 	ctx := context.Background()
 
-	if _, err := l.build(ctx, Order{Mint: "MINT", Side: "buy", SolIn: 0.25, State: curve.State{VSol: 30, VTokens: 1e9, AMM: true}}, owner); err != nil {
+	if _, _, err := l.build(ctx, Order{Mint: "MINT", Side: "buy", SolIn: 0.25, State: curve.State{VSol: 30, VTokens: 1e9, AMM: true}}, owner); err != nil {
 		t.Fatal(err)
 	}
 	if pumpportal.Load() != 0 || quote.Get("outputMint") != "MINT" || quote.Get("amount") != "250000000" || quote.Get("slippageBps") != "1500" ||
@@ -369,7 +371,7 @@ func TestLiveBuysGraduatedTokensThroughJupiter(t *testing.T) {
 		{Mint: "MINT", Side: "buy", SolIn: 0.25, State: curve.State{VSol: 30, VTokens: 1e9}},              // bonding curve buy
 		{Mint: "MINT", Side: "sell", SellPct: 100, State: curve.State{VSol: 30, VTokens: 1e9, AMM: true}}, // graduated sell
 	} {
-		if _, err := l.build(ctx, o, owner); err != nil {
+		if _, _, err := l.build(ctx, o, owner); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -412,5 +414,127 @@ func TestSharedTokenSellsExactAmount(t *testing.T) {
 	}
 	if r := (&Live{}).request(Order{Side: "sell", Tokens: 1234.5678919}); r.Amount != "1234.567891" || r.DenominatedInSol != "false" {
 		t.Fatalf("exact sell request %+v", r)
+	}
+}
+
+// A buy with a deadline gets a blockhash that expires at the deadline (so it lands
+// in time or never), and once the deadline has passed nothing more is sent.
+func TestLiveBuyDeadline(t *testing.T) {
+	pk := ed25519.NewKeyFromSeed(make([]byte, 32))
+	kp, _ := solana.ParseKeypair(base58.Encode(pk))
+	old := base58.Encode(bytes.Repeat([]byte{7}, 32))
+	var builds atomic.Int32
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		builds.Add(1)
+		w.Write(unsignedTx(kp.Public))
+	}))
+	defer pp.Close()
+	var sentHash string
+	var blockSlot float64
+	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			Params []any  `json:"params"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		reply := func(v any) { json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": v}) }
+		switch req.Method {
+		case "getSlot":
+			reply(1000)
+		case "getBlock":
+			blockSlot = req.Params[0].(float64)
+			reply(map[string]any{"blockhash": old})
+		case "sendTransaction":
+			raw, _ := base64.StdEncoding.DecodeString(req.Params[0].(string))
+			tx, _ := solana.ParseTx(raw)
+			sig, _ := base58.Decode(tx.Signature())
+			if !ed25519.Verify(kp.Public, tx.Message(), sig) {
+				t.Errorf("signature must cover the swapped blockhash")
+			}
+			sentHash = tx.BlockhashBase58()
+			reply(tx.Signature())
+		case "getSignatureStatuses":
+			reply(map[string]any{"value": []any{nil}})
+		case "isBlockhashValid":
+			reply(map[string]any{"value": false})
+		}
+	}))
+	defer rpc.Close()
+	l := &Live{Key: kp, RPC: solana.NewRPC(rpc.URL), TradeURL: pp.URL, MaxAttempts: 3, HTTP: http.DefaultClient}
+	now := time.Now()
+	_, err := l.Execute(context.Background(), Order{Mint: "MINT", Side: "buy", SolIn: 0.1, At: now.Add(-7 * time.Second), Deadline: now.Add(3 * time.Second)})
+	if !errors.Is(err, ErrTooLate) {
+		t.Fatalf("never landed before the deadline: want too late, got %v", err)
+	}
+	if sentHash != old {
+		t.Fatalf("sent with blockhash %s, want the expiring one", sentHash)
+	}
+	if back := 1000 - blockSlot; back < 137 || back > 142 { // ~3s = ~7 blocks of life left
+		t.Fatalf("picked a block %v slots back", back)
+	}
+	if builds.Load() != 1 {
+		t.Fatalf("built %d times: no retry after the deadline", builds.Load())
+	}
+	_, err = l.Execute(context.Background(), Order{Mint: "MINT", Side: "buy", SolIn: 0.1, At: now.Add(-20 * time.Second), Deadline: now.Add(-10 * time.Second)})
+	if !errors.Is(err, ErrTooLate) || builds.Load() != 1 {
+		t.Fatalf("already late: want nothing built, got %v (builds %d)", err, builds.Load())
+	}
+}
+
+// PumpPortal won't build a Jito bundle sell for a bonding-curve token: fall back
+// to a normal tx instead of failing the exit.
+func TestJitoBundleFallsBackToNormalTx(t *testing.T) {
+	pk := ed25519.NewKeyFromSeed(make([]byte, 32))
+	kp, _ := solana.ParseKeypair(base58.Encode(pk))
+	var bundles, plain atomic.Int32
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if b[0] == '[' {
+			bundles.Add(1)
+			if strings.Contains(string(b), `"sell"`) {
+				http.Error(w, "Bad Request", 400)
+				return
+			}
+			json.NewEncoder(w).Encode([]string{base58.Encode(unsignedTx(kp.Public))})
+			return
+		}
+		plain.Add(1)
+		w.Write(unsignedTx(kp.Public))
+	}))
+	defer pp.Close()
+	l := &Live{Key: kp, TradeURL: pp.URL, JitoTipSol: 0.0001, PriorityFee: 0.0005, HTTP: http.DefaultClient}
+	ctx := context.Background()
+	if _, jito, err := l.build(ctx, Order{Mint: "M", Side: "buy", SolIn: 0.1}, kp.PublicBase58()); err != nil || !jito {
+		t.Fatalf("buy: jito %v err %v", jito, err)
+	}
+	if _, jito, err := l.build(ctx, Order{Mint: "M", Side: "sell", SellPct: 100}, kp.PublicBase58()); err != nil || jito {
+		t.Fatalf("sell: jito %v err %v", jito, err)
+	}
+	if bundles.Load() != 2 || plain.Load() != 1 {
+		t.Fatalf("bundle requests %d, plain %d", bundles.Load(), plain.Load())
+	}
+}
+
+// A buy that sat in the queue past the limit is rejected without sending anything.
+func TestExecutorRejectsLateBuy(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5, BuyMaxLag: 10 * time.Second})
+	ex.Sync = false
+	rec := &recorder{Paper: ex.Trader.(Paper)}
+	ex.Trader = rec
+	ctx := context.Background()
+	tr := trd("S1", "LIVE", "MINT", "buy", 30, 0, true, 1e6, 1e6)
+	tr.ReceivedAt = time.Now().Add(-15 * time.Second)
+	ex.mu.Lock()
+	ex.curves["MINT"] = curve.State{VSol: 30, VTokens: 32.19e9 / 30}
+	ex.mu.Unlock()
+	ex.buy(ctx, tr)
+	fs, _ := st.ListLiveFills(ctx, store.LiveFilter{})
+	if len(rec.orders) != 0 || len(fs) != 1 || fs[0].Status != "rejected" || !strings.Contains(fs[0].Error, "too late") {
+		t.Fatalf("orders %d fills %+v", len(rec.orders), fs)
+	}
+	tr.Signature, tr.ReceivedAt = "S2", time.Now()
+	ex.buy(ctx, tr)
+	if len(rec.orders) != 1 || rec.orders[0].Deadline.IsZero() {
+		t.Fatalf("fresh buy should go out with a deadline: %+v", rec.orders)
 	}
 }
