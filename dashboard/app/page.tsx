@@ -3,18 +3,106 @@ import Link from "next/link";
 import { useState } from "react";
 import LineChart, { mergeSeries } from "@/components/LineChart";
 import { Err, Seg, Stat, Table, WalletName } from "@/components/ui";
-import { LivePosition, Point, SimPosition, useApi, useEvents, useWalletNames } from "@/lib/api";
-import { ago, num, pnlClass, short, usd } from "@/lib/format";
+import { LiveFill, LivePosition, Point, SimPosition, useApi, useEvents, useWalletNames } from "@/lib/api";
+import { ago, num, pnlClass, short, sol, usd } from "@/lib/format";
 import { help } from "@/lib/glossary";
 
 type Overview = {
   delay: number; scope: string; wallet_counts: Record<string, number>; bankroll_usd: number;
   pnl: { day: number; week: number; month: number; all: number };
   today: { closed_usd: number; closed: number; won: number; open_usd: number; open_cost_usd: number; open: number; tz: string };
-  equity: Point[]; exec_equity: Point[]; open_positions: SimPosition[]; exec_open: LivePosition[]; exec_mode: string; positions: number;
+  equity: Point[]; exec_equity: Point[]; open_positions: SimPosition[]; exec_open: LivePosition[] | null; exec_mode: string; positions: number;
+  run_mode: string; live_wallets: string[] | null;
+  exec_today: { closed_usd: number; closed: number; won: number; open_usd: number; open_cost_usd: number; open: number };
+  exec_pnl: { week: number; all: number; since: string | null };
+  wallet: { address: string; balance_sol: number; sol_usd?: number } | null;
 };
 
 export default function OverviewPage() {
+  // "" = follow the executor: real money when it trades live, else paper copies.
+  const [pick, setPick] = useState<"" | "real" | "paper">("");
+  const { data } = useApi<Overview>("overview?mode=live");
+  const real = pick === "real" || (pick === "" && data?.run_mode === "live");
+  const toggle = data?.run_mode === "live" && (
+    <Seg value={real ? "real" : "paper"} onChange={setPick} options={[
+      { v: "real", label: "Real money", title: "What the auto-trader is doing with your wallet" },
+      { v: "paper", label: "Paper copies", title: "$25 simulated copies of every wallet, for picking who to copy" }]} />
+  );
+  return real && data ? <RealOverview data={data} toggle={toggle} /> : <PaperOverview toggle={toggle} />;
+}
+
+// RealOverview is the live wallet: its balance, what the auto-trader made, and
+// its open trades and orders. Only the wallets being copied appear.
+function RealOverview({ data, toggle }: { data: Overview; toggle: React.ReactNode }) {
+  const { names } = useWalletNames();
+  const { data: ex } = useApi<{ fills: LiveFill[] | null }>("executor?mode=live&limit=15", 10000);
+  const t = data.exec_today;
+  const w = data.wallet;
+  const rows = mergeSeries({ exec: data.exec_equity });
+  const who = (data.live_wallets ?? []).map((a) => names.get(a) ?? short(a));
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h2>Overview</h2>
+          <div className="sub">
+            Real money: your wallet{w ? <> <a className="mono link" href={`https://solscan.io/account/${w.address}`} target="_blank" rel="noreferrer">{short(w.address)}</a></> : ""}{" "}
+            copying {who.length ? who.join(", ") : "no one yet"}. Results are after all fees.
+          </div>
+        </div>
+        <div className="row">{toggle}</div>
+      </div>
+      <div className="grid stats">
+        <Stat label="Wallet balance" value={w ? (w.sol_usd ? usd(w.balance_sol * w.sol_usd) : sol(w.balance_sol)) : "-"}
+          hint={w ? `${sol(w.balance_sol)} free to trade, plus open trades` : "no trading wallet set"} />
+        <Stat label="Today, closed" help={help("closed")} value={usd(t.closed_usd, true)} tone={t.closed_usd}
+          hint={`${t.won} of ${t.closed} trades won · since midnight Eastern`} />
+        <Stat label="Open right now" help={help("open")} value={usd(t.open_usd, true)} tone={t.open ? t.open_usd : undefined}
+          hint={t.open ? `${t.open} trade${t.open > 1 ? "s" : ""}, ${usd(t.open_cost_usd)} in, not final` : "nothing open"} />
+        <Stat label="Since going live" value={usd(data.exec_pnl.all, true)} tone={data.exec_pnl.all}
+          hint={data.exec_pnl.since ? `closed + open, since ${new Date(data.exec_pnl.since).toLocaleDateString([], { month: "short", day: "numeric" })}` : "no trades yet"} />
+        <Stat label="Copying" value={who.length ? who.join(", ") : "-"} hint={<Link href="/executor" className="link">limits and controls</Link>} />
+      </div>
+      <div className="grid two" style={{ marginTop: 14 }}>
+        <div className="card">
+          <h3>Open trades ({data.exec_open?.length ?? 0})</h3>
+          <Table rows={data.exec_open ?? []} rowKey={(p) => p.id} initialSort={{ key: "opened", desc: true }}
+            empty="Nothing open. A trade opens here when a wallet you copy buys."
+            cols={[
+              { key: "wallet", label: "Copying", render: (p) => <WalletName addr={p.wallet} names={names} /> },
+              { key: "mint", label: "Token", render: (p) => <a className="mono" href={`https://pump.fun/coin/${p.mint}`} target="_blank" rel="noreferrer">{short(p.mint)}</a> },
+              { key: "opened", label: "Opened", sort: (p) => p.opened_at, render: (p) => ago(p.opened_at) },
+              { key: "cost", label: "In", num: true, hideSm: true, render: (p) => usd(p.cost_sol * p.sol_usd) },
+              { key: "mark", label: "Now", help: help("open"), num: true, sort: (p) => p.mark_pnl_usd ?? 0,
+                render: (p) => <span className={pnlClass(p.mark_pnl_usd)}>{usd(p.mark_pnl_usd, true)}</span> },
+            ]} />
+        </div>
+        <div className="card">
+          <h3>Recent orders</h3>
+          <Table rows={ex?.fills ?? []} rowKey={(f) => f.id} empty="No real orders yet. The first one goes out on the next buy by a wallet you copy."
+            cols={[
+              { key: "t", label: "Sent", render: (f) => new Date(f.sent_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) },
+              { key: "side", label: "Order", render: (f) => `${f.side}${f.reason !== "copy" ? ` (${f.reason.replace(/_/g, " ")})` : ""}` },
+              { key: "mint", label: "Token", render: (f) => <span className="mono">{short(f.mint)}</span> },
+              { key: "amt", label: "SOL", num: true, render: (f) => f.status === "filled" ? num(f.sol_amount, 4) : "-" },
+              { key: "lat", label: "Delay", help: "Time from their trade to our order landing.", num: true,
+                render: (f) => f.filled_at ? `${((new Date(f.filled_at).getTime() - new Date(f.target_at).getTime()) / 1000).toFixed(1)}s` : "-" },
+              { key: "st", label: "Status", render: (f) => f.signature ? <a href={`https://solscan.io/tx/${f.signature}`} target="_blank" rel="noreferrer"
+                className={`badge ${f.status === "failed" ? "failed" : ""}`} title={f.error}>{f.status}</a>
+                : <span className={`badge ${f.status === "failed" ? "failed" : ""}`} title={f.error}>{f.status}</span> },
+            ]} />
+        </div>
+      </div>
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3>Real P&amp;L by day</h3>
+        {rows.length < 2 ? <div className="empty">This fills in after the first days of live trading.</div>
+          : <LineChart rows={rows} series={[{ key: "exec", label: "Real money", color: "var(--series-2)" }]} />}
+      </div>
+    </>
+  );
+}
+
+function PaperOverview({ toggle }: { toggle: React.ReactNode }) {
   const [delay, setDelay] = useState(2);
   const [scope, setScope] = useState<"" | "all">("");
   const [execView, setExecView] = useState<"" | "paper" | "live">("");
@@ -41,6 +129,7 @@ export default function OverviewPage() {
           </div>
         </div>
         <div className="row">
+          {toggle}
           <Seg value={effScope} onChange={setScope} options={[
             { v: "", label: "Live wallets", title: help("liveWallet") }, { v: "all", label: "All watched", title: help("watching") }]} />
           <Seg value={delay} onChange={setDelay} options={[2, 10, 60].map((d) => ({ v: d, label: `+${d}s`, title: help("delay") }))} />
@@ -94,8 +183,8 @@ export default function OverviewPage() {
             ]} />
           {(data?.exec_open?.length ?? 0) > 0 && (
             <>
-              <h3 style={{ marginTop: 16 }}>Auto-trader open positions, {shownExec} ({data!.exec_open.length})</h3>
-              <Table rows={data!.exec_open} rowKey={(p) => p.id} cols={[
+              <h3 style={{ marginTop: 16 }}>Auto-trader open positions, {shownExec} ({data!.exec_open!.length})</h3>
+              <Table rows={data!.exec_open ?? []} rowKey={(p) => p.id} cols={[
                 { key: "mode", label: "Mode", render: (p) => <span className="badge">{p.mode}</span> },
                 { key: "wallet", label: "Copying", render: (p) => <WalletName addr={p.wallet} names={names} /> },
                 { key: "mint", label: "Token", render: (p) => <span className="mono">{short(p.mint)}</span> },

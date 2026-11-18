@@ -38,7 +38,15 @@ type Server struct {
 	Lag   Lagger
 	Cfg   config.Config
 	Now   func() time.Time
-	hub   *hub
+	// Wallet, if set, reads the trading wallet's address and SOL balance (live mode).
+	Wallet func(ctx context.Context) (addr string, sol float64, err error)
+	// SolUSD, if set, is the current SOL price.
+	SolUSD func() float64
+	hub    *hub
+
+	walletMu  sync.Mutex
+	walletAt  time.Time
+	walletVal map[string]any
 }
 
 func New(st store.Store, b bus.Bus, lag Lagger, c config.Config) *Server {
@@ -201,8 +209,43 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	execMode := s.viewMode(r)
 	live, _ := s.Store.ListLivePositions(ctx, store.LiveFilter{Mode: execMode, Since: now.AddDate(0, 0, -90)})
 	var execOuts []score.Outcome
+	// The auto-trader's own numbers, same day boundary as above: the overview's
+	// "real money" view.
+	et := map[string]any{"closed_usd": 0.0, "closed": 0, "won": 0, "open_usd": 0.0, "open_cost_usd": 0.0, "open": 0}
+	var execOpen []execPos
+	var execAll, execWeek float64
+	var execSince *time.Time
 	for _, p := range live {
-		execOuts = append(execOuts, valueLive(p, toks(p.Mint), fees, now))
+		o := valueLive(p, toks(p.Mint), fees, now)
+		execOuts = append(execOuts, o)
+		execAll += o.PnlUSD
+		if !o.At.Before(now.AddDate(0, 0, -7)) {
+			execWeek += o.PnlUSD
+		}
+		if execSince == nil || p.OpenedAt.Before(*execSince) {
+			t := p.OpenedAt
+			execSince = &t
+		}
+		switch {
+		case p.Status == model.PosOpen:
+			v := o.PnlUSD
+			execOpen = append(execOpen, execPos{LivePosition: p, MarkPnlUSD: &v})
+			et["open_usd"] = et["open_usd"].(float64) + v
+			et["open_cost_usd"] = et["open_cost_usd"].(float64) + p.CostSol*p.SolUSD
+			et["open"] = et["open"].(int) + 1
+		case o.Closed && !o.At.Before(day):
+			et["closed_usd"] = et["closed_usd"].(float64) + o.PnlUSD
+			et["closed"] = et["closed"].(int) + 1
+			if o.PnlUSD > 0 {
+				et["won"] = et["won"].(int) + 1
+			}
+		}
+	}
+	var liveWallets []string
+	for _, wl := range wallets {
+		if wl.Status == model.StatusLive {
+			liveWallets = append(liveWallets, wl.Address)
+		}
 	}
 	writeJSON(w, 200, map[string]any{
 		"delay": delay, "scope": scope, "wallet_counts": counts, "bankroll_usd": s.Cfg.BankrollUSD,
@@ -211,26 +254,47 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		"equity":         dailySeries(outs),
 		"exec_equity":    dailySeries(execOuts),
 		"open_positions": open,
-		"exec_open":      filterOpen(live),
+		"exec_open":      execOpen,
 		"exec_mode":      execMode,
+		"run_mode":       s.runMode(),
+		"exec_today":     et,
+		"exec_pnl":       map[string]any{"week": execWeek, "all": execAll, "since": execSince},
+		"live_wallets":   liveWallets,
+		"wallet":         s.walletInfo(ctx, execMode),
 		"positions":      len(outs),
 	})
+}
+
+// walletInfo is the trading wallet's address and balance, read at most every 15s
+// (nil in paper view or when no wallet is configured).
+func (s *Server) walletInfo(ctx context.Context, mode string) map[string]any {
+	if mode != "live" || s.Wallet == nil {
+		return nil
+	}
+	s.walletMu.Lock()
+	defer s.walletMu.Unlock()
+	if s.walletVal != nil && s.Now().Sub(s.walletAt) < 15*time.Second {
+		return s.walletVal
+	}
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	addr, bal, err := s.Wallet(cctx)
+	if err != nil {
+		slog.Warn("wallet balance", "err", err)
+		return s.walletVal // last known, or nil
+	}
+	v := map[string]any{"address": addr, "balance_sol": bal}
+	if s.SolUSD != nil {
+		v["sol_usd"] = s.SolUSD()
+	}
+	s.walletVal, s.walletAt = v, s.Now()
+	return v
 }
 
 func valueLive(p model.LivePosition, tok *model.Token, fees curve.Fees, now time.Time) score.Outcome {
 	sp := model.SimPosition{Status: p.Status, ClosedAt: p.ClosedAt, OpenedAt: p.OpenedAt, CostSol: p.CostSol,
 		ProceedsSol: p.ProceedsSol, TokensHeld: p.TokensHeld, SolUSD: p.SolUSD}
 	return score.Value(sp, tok, fees, now)
-}
-
-func filterOpen(ps []model.LivePosition) []model.LivePosition {
-	var out []model.LivePosition
-	for _, p := range ps {
-		if p.Status == model.PosOpen {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func dailySeries(outs []score.Outcome) []point {
