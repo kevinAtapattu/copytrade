@@ -69,7 +69,7 @@ func TestHourly(t *testing.T) {
 		{Wallet: "Dior", Mint: "MsGD..pump", PnlUSD: 9.10, PnlPct: 0.364, TheirPct: nan, HoldS: 30},
 	}
 	day := append([]CopyLine{{Wallet: "Zyaf", PnlUSD: -5.37}}, hour...)
-	s := Hourly("paper", hour, day)
+	s := Hourly("paper", hour, day, Failures{})
 	want := "[PAPER] P&L this hour: +$7.22 (2 trades, 1 won)\n" +
 		"P&L today: +$1.85 (3 trades, 1 won)\n\n" +
 		"Trade notes:\n" +
@@ -78,14 +78,38 @@ func TestHourly(t *testing.T) {
 	if s != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", s, want)
 	}
-	if Hourly("paper", nil, day) != "" {
+	if Hourly("paper", nil, day, Failures{}) != "" {
 		t.Fatal("a quiet hour should send nothing")
 	}
 	var many []CopyLine
 	for i := 0; i < 500; i++ {
 		many = append(many, CopyLine{Wallet: "w", Mint: "m", PnlUSD: 1, TheirPct: nan})
 	}
-	if s := Hourly("live", many, many); len(s) > MaxMsg || !strings.Contains(s, "more") {
+	if s := Hourly("live", many, many, Failures{}); len(s) > MaxMsg || !strings.Contains(s, "more") {
 		t.Fatalf("long hour: %d chars", len(s))
+	}
+}
+
+// A failed sell alerts at once (deduped per token); a failed buy waits for the
+// hourly message, which also goes out when only failures happened.
+func TestFailures(t *testing.T) {
+	ev := func(side string) model.Event {
+		return model.Event{Kind: "error", Service: "executor", Message: "[live] " + side + " MINT failed",
+			Data: model.LiveFill{Mode: "live", Side: side, Mint: "MINTaaaaaaaaaaaaaaapump", Status: "failed"}}
+	}
+	if d := Classify(ev("sell")); !d.Now || d.Key != "sellfail:MINTaaaaaaaaaaaaaaapump" {
+		t.Fatalf("failed sell should alert now: %+v", d)
+	}
+	if Classify(ev("buy")).Now {
+		t.Fatal("failed buy should wait for the hourly message")
+	}
+	s := SellFailed(model.LiveFill{Mode: "live", Mint: "MINTaaaaaaaaaaaaaaapump", Attempts: 3, Error: "slippage exceeded"}, "nad")
+	if !strings.HasPrefix(s, "[LIVE] SELL FAILED: nad · MINT..pump after 3 tries: slippage exceeded") {
+		t.Fatalf("sell failed text: %q", s)
+	}
+	h := Hourly("live", nil, nil, Failures{Buys: 2, Sells: 1})
+	want := "[LIVE] P&L this hour: +$0.00 (0 trades, 0 won)\nP&L today: +$0.00 (0 trades, 0 won)\nFailed this hour: 2 buys (missed), 1 sell (still holding)"
+	if h != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", h, want)
 	}
 }

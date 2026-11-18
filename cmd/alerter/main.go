@@ -1,7 +1,7 @@
 // Command alerter sends one Discord/Telegram message an hour about the copies
 // the executor made of our live wallets: P&L this hour, P&L today, then a note
 // per trade (see internal/alert/policy.go). Quiet hours send nothing. The only
-// other alerts are safety stops (kill switch, daily loss limit).
+// instant alerts are failed sells and safety stops (kill switch, daily loss limit).
 package main
 
 import (
@@ -107,7 +107,15 @@ func main() {
 				slog.Warn("hourly (today)", "err", err)
 				return
 			}
-			send(alert.Hourly(mode, lines, day)) // "" when nothing closed: no message
+			fail, fmode, err := alert.ExecFailures(a.Ctx, a.Store, last, now)
+			if err != nil {
+				slog.Warn("hourly (failures)", "err", err)
+				return
+			}
+			if mode == "" {
+				mode = fmode
+			}
+			send(alert.Hourly(mode, lines, day, fail)) // "" when nothing closed or failed: no message
 			setSetting(a.Ctx, a, keyRollupLast, now.Format(time.RFC3339Nano))
 		})
 	}
@@ -129,6 +137,13 @@ func main() {
 		if !ok {
 			held.Add(1)
 			return nil
+		}
+		if ev.Kind == "error" {
+			var f model.LiveFill
+			if b, err := json.Marshal(ev.Data); err == nil && json.Unmarshal(b, &f) == nil && f.Mint != "" {
+				send(alert.SellFailed(f, alert.WalletName(ctx, a.Store, f.Wallet)))
+				return nil
+			}
 		}
 		send(alert.Format(ev))
 		return nil

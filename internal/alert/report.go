@@ -109,6 +109,34 @@ func ExecLines(ctx context.Context, st store.Store, from, to time.Time) ([]CopyL
 	return sorted, mode, nil
 }
 
+// ExecFailures counts the executor's buys and sells sent in (from, to] that
+// failed after all retries, and the executor's mode ("" if none).
+func ExecFailures(ctx context.Context, st store.Store, from, to time.Time) (Failures, string, error) {
+	fs, err := st.ListLiveFills(ctx, store.LiveFilter{Since: from})
+	if err != nil {
+		return Failures{}, "", err
+	}
+	var out Failures
+	mode := ""
+	for _, f := range fs {
+		if f.Status != "failed" || !f.SentAt.After(from) || f.SentAt.After(to) {
+			continue
+		}
+		if f.Side == model.SideSell {
+			out.Sells++
+		} else {
+			out.Buys++
+		}
+		mode = f.Mode
+	}
+	return out, mode, nil
+}
+
+// WalletName is the wallet's label, or its short address.
+func WalletName(ctx context.Context, st store.Store, addr string) string {
+	return newReporter(ctx, st).name(addr)
+}
+
 func short(a string) string {
 	if len(a) <= 10 {
 		return a

@@ -11,8 +11,9 @@ import (
 )
 
 // Alerts are one hourly message about the copies the executor made of our live
-// wallets (paper or real money): P&L this hour, P&L today, then a note per trade.
-// The only other messages are safety stops, which mean trading has stopped.
+// wallets (paper or real money): P&L this hour, P&L today, failed trades, then a
+// note per trade. The only instant messages are failed sells (we may be stuck
+// holding a token) and safety stops, which mean trading has stopped.
 
 // Decision says whether an event alerts immediately and how it is deduped.
 type Decision struct {
@@ -22,9 +23,13 @@ type Decision struct {
 	Window time.Duration
 }
 
-// Classify decides whether an event alerts on its own. Only safety stops do;
-// trades go in the hourly message. Pure, so it is unit-tested.
+// Classify decides whether an event alerts on its own. Only failed sells and
+// safety stops do; trades and failed buys (a missed trade) go in the hourly
+// message. Pure, so it is unit-tested.
 func Classify(ev model.Event) Decision {
+	if ev.Kind == "error" && ev.Service == "executor" && dataString(ev, "side") == model.SideSell && dataString(ev, "status") == "failed" {
+		return Decision{Now: true, Key: "sellfail:" + dataString(ev, "mint"), Window: 15 * time.Minute}
+	}
 	if ev.Kind != "info" {
 		return Decision{}
 	}
@@ -96,19 +101,35 @@ type CopyLine struct {
 	Migrated bool
 }
 
+// Failures counts the executor's trades that failed after all retries.
+type Failures struct{ Buys, Sells int }
+
+// SellFailed is the instant alert for a sell that failed after all retries.
+func SellFailed(f model.LiveFill, wallet string) string {
+	return fmt.Sprintf("[%s] SELL FAILED: %s · %s after %d tr%s: %s\n"+
+		"Still holding it. The bot tries again on their next sell or at the stop loss; sell by hand in your wallet if it keeps failing.",
+		strings.ToUpper(f.Mode), wallet, short(f.Mint), f.Attempts, map[bool]string{true: "y", false: "ies"}[f.Attempts == 1], f.Error)
+}
+
 // MaxMsg keeps messages under Discord's 2000-character limit with room to spare.
 const MaxMsg = 1900
 
 // Hourly is the alert: P&L this hour, P&L today, then one note per trade that
 // closed this hour, newest last. mode is "paper" or "live". Returns "" when
-// nothing closed this hour.
-func Hourly(mode string, hour, day []CopyLine) string {
-	if len(hour) == 0 {
+// nothing closed or failed this hour.
+func Hourly(mode string, hour, day []CopyLine, fail Failures) string {
+	if len(hour) == 0 && fail == (Failures{}) {
 		return ""
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%s] P&L this hour: %s\n", strings.ToUpper(mode), totals(hour))
-	fmt.Fprintf(&b, "P&L today: %s\n\nTrade notes:\n", totals(day))
+	fmt.Fprintf(&b, "P&L today: %s\n", totals(day))
+	if fail != (Failures{}) {
+		fmt.Fprintf(&b, "Failed this hour: %s\n", failText(fail))
+	}
+	if len(hour) > 0 {
+		b.WriteString("\nTrade notes:\n")
+	}
 	for i, l := range hour {
 		line := "• " + FormatCopy(l) + "\n"
 		if b.Len()+len(line) > MaxMsg-40 {
@@ -118,6 +139,18 @@ func Hourly(mode string, hour, day []CopyLine) string {
 		b.WriteString(line)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// failText is "2 buys (missed), 1 sell (still holding)".
+func failText(f Failures) string {
+	var parts []string
+	if f.Buys > 0 {
+		parts = append(parts, fmt.Sprintf("%d buy%s (missed)", f.Buys, map[bool]string{true: "", false: "s"}[f.Buys == 1]))
+	}
+	if f.Sells > 0 {
+		parts = append(parts, fmt.Sprintf("%d sell%s (still holding)", f.Sells, map[bool]string{true: "", false: "s"}[f.Sells == 1]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // totals is "+$8.40 (3 trades, 2 won)".
