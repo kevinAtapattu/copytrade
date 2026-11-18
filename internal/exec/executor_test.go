@@ -750,3 +750,28 @@ func TestBundleAlsoSentByRPCAndResent(t *testing.T) {
 			bundles.Load(), sends.Load(), len(sigs), res.Signature)
 	}
 }
+
+// A copy bought on the bonding curve that migrated since is sold on PumpSwap,
+// even when no PumpSwap trade has been seen since start (Nov 18: 6005 x3).
+func TestSellAfterMigrationTargetsPumpSwap(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	rec := &recorder{Paper: ex.Trader.(Paper)}
+	ex.Trader = rec
+	ctx := context.Background()
+	ex.HandleTrade(ctx, trd("a", "LIVE", "M1", "buy", 40, 0, true, 1e6, 1e6))
+	st.UpsertTokenFromTrade(ctx, model.Trade{Mint: "M1", Pool: model.PoolPumpSwap, VSol: 90, VTokens: 2e8, ReceivedAt: t0.Add(time.Minute)})
+	ps, _ := st.ListLivePositions(ctx, store.LiveFilter{OpenOnly: true})
+	if len(ps) != 1 {
+		t.Fatalf("open %d", len(ps))
+	}
+	if err := ex.ManualSell(ctx, ps[0].ID, 100, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	last := rec.orders[len(rec.orders)-1]
+	if last.Side != model.SideSell || !last.State.AMM {
+		t.Fatalf("sell not aimed at PumpSwap: %+v", last)
+	}
+	if r := (&Live{}).request(last); r.Pool != "pump-amm" {
+		t.Fatalf("PumpPortal pool %q", r.Pool)
+	}
+}

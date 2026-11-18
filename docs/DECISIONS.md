@@ -311,3 +311,7 @@ Today's result is realized P&L plus open copies marked at the latest price (proc
 - Buys now go as normal transactions through our RPC with the 0.0005 SOL priority fee (`JITO_TIP_SOL=0`), the same path sells already use.
 - Our RPC send uses `maxRetries: 0`, so a tx was passed on once and never again. The trader now re-sends the same signed tx every second until it lands or its blockhash expires. It is the same signature, so it can't fill twice.
 - If Jito is turned back on, a bundle's tx is also sent through our RPC, and an unlanded bundle's Jito status ("Failed", "Invalid"...) goes into the order's error. Failed orders now keep their signature so they can be looked up on-chain.
+
+## Sells right after a token migrates (Nov 18)
+- A copy bought on the bonding curve (7qgvmE) migrated to PumpSwap seconds before nad sold. PumpPortal's `pool: "auto"` kept building a bonding-curve sell, which failed on-chain with 6005 (curve complete) on all 3 tries, twice. We held the token until a manual sell.
+- Sells of a token whose last known trade was on PumpSwap now ask PumpPortal for `pool: "pump-amm"`. When the executor has no PumpSwap state for the token (e.g. right after a restart), it checks the stored token pool before selling.

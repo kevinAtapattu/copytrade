@@ -108,6 +108,12 @@ type tradeReq struct {
 func (l *Live) request(o Order) tradeReq {
 	r := tradeReq{PublicKey: l.Key.PublicBase58(), Action: o.Side, Mint: o.Mint, Slippage: l.SlippagePct,
 		PriorityFee: l.PriorityFee, Pool: "auto"} // auto: still works after the token migrates off the curve
+	if o.State.AMM {
+		// The trade we follow was on PumpSwap. Right after a token migrates, "auto"
+		// still builds a bonding-curve tx that fails with 6005 (curve complete), so
+		// name the pool (seen Nov 18: a copy-sell failed 3 times this way).
+		r.Pool = "pump-amm"
+	}
 	if o.Side == "buy" {
 		r.Amount, r.DenominatedInSol = round(o.SolIn, 6), "true"
 	} else if o.SellPct <= 0 {

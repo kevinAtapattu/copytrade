@@ -396,6 +396,14 @@ func (e *Executor) sell(ctx context.Context, p *model.LivePosition, pct float64,
 	if tokens <= 0 {
 		return
 	}
+	if !st.AMM && e.Store != nil {
+		// No PumpSwap trade seen since start (or the token migrated meanwhile): the
+		// stored pool says where it trades now, so the sell isn't built for a
+		// completed bonding curve.
+		if tok, ok, err := e.Store.GetToken(ctx, p.Mint); err == nil && ok && tok.Pool == model.PoolPumpSwap {
+			st.AMM = true
+		}
+	}
 	sent := time.Now()
 	if e.Sync {
 		sent = t.ReceivedAt
