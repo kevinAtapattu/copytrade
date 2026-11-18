@@ -212,26 +212,43 @@ func (l *Live) call(ctx context.Context, method, u string, body []byte) ([]byte,
 	return data, nil
 }
 
-func (l *Live) send(ctx context.Context, tx *solana.Tx, jito bool) error {
-	if jito {
-		_, err := solana.SendJitoBundle(ctx, l.HTTP, l.JitoURL, []string{base58.Encode(tx.Raw)})
-		return err
+// send hands the signed tx to the network and returns the Jito bundle id, if any.
+// A bundle's tx also goes through our RPC: it is the same signed tx, so it lands
+// at most once, and it can still land when Jito drops the bundle or the leader
+// doesn't run Jito. It fails only when every route refused it.
+func (l *Live) send(ctx context.Context, tx *solana.Tx, jito bool) (string, error) {
+	if !jito {
+		_, err := l.RPC.SendTransaction(ctx, tx.Raw)
+		return "", err
 	}
-	_, err := l.RPC.SendTransaction(ctx, tx.Raw)
-	return err
+	var id string
+	var jitoErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		id, jitoErr = solana.SendJitoBundle(ctx, l.HTTP, l.JitoURL, []string{base58.Encode(tx.Raw)})
+	}()
+	_, rpcErr := l.RPC.SendTransaction(ctx, tx.Raw)
+	<-done
+	if jitoErr != nil {
+		slog.Warn("jito bundle not accepted, sent through RPC only", "err", jitoErr)
+		return "", rpcErr
+	}
+	return id, nil
 }
 
 // Execute retries with a freshly built tx. A retry is only sent once the previous
 // tx has failed on-chain or its blockhash has expired, so we never double-fill.
 func (l *Live) Execute(ctx context.Context, o Order) (Result, error) {
 	var lastErr error
+	var lastSig string // kept on failure so the order can be looked up on-chain
 	attempts := max(l.MaxAttempts, 1)
 	for i := 1; i <= attempts; i++ {
 		if late := tooLate(o, time.Now()); late != nil {
 			if i == 1 {
 				return Result{}, late
 			}
-			return Result{Attempts: i - 1}, fmt.Errorf("%w (after: %v)", late, lastErr)
+			return Result{Attempts: i - 1, Signature: lastSig}, fmt.Errorf("%w (after: %v)", late, lastErr)
 		}
 		res, err := l.once(ctx, o)
 		res.Attempts = i
@@ -239,12 +256,15 @@ func (l *Live) Execute(ctx context.Context, o Order) (Result, error) {
 			return res, nil
 		}
 		lastErr = err
+		if res.Signature != "" {
+			lastSig = res.Signature
+		}
 		var fatal *fatalErr
 		if errors.As(err, &fatal) || ctx.Err() != nil {
 			break
 		}
 	}
-	return Result{Attempts: attempts}, lastErr
+	return Result{Attempts: attempts, Signature: lastSig}, lastErr
 }
 
 type fatalErr struct{ error }
@@ -302,7 +322,8 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 		return Result{}, &fatalErr{err}
 	}
 	sig := tx.Signature()
-	if err := l.send(ctx, tx, jito); err != nil {
+	bundle, err := l.send(ctx, tx, jito)
+	if err != nil {
 		var rej *solana.RPCError
 		if errors.As(err, &rej) {
 			return Result{Signature: sig}, err // node definitely rejected it: safe to rebuild now
@@ -315,12 +336,25 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 	if bh != "" {
 		wait = time.Until(o.Deadline) + 2*time.Second // the tx can't land after its blockhash expires
 	}
-	landed, err := l.confirm(ctx, sig, tx.BlockhashBase58(), wait)
+	// Our RPC passes a tx on once (maxRetries 0), so re-send it every second until
+	// it lands or expires. Same signature: it can't fill twice.
+	resend := func() { _, _ = l.RPC.SendTransaction(ctx, tx.Raw) }
+	landed, err := l.confirm(ctx, sig, tx.BlockhashBase58(), wait, resend)
 	if err != nil {
 		return Result{Signature: sig}, err
 	}
 	if !landed {
-		return Result{Signature: sig}, errors.New("not confirmed before blockhash expired")
+		msg := "not confirmed before blockhash expired"
+		if bundle != "" {
+			cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			st, err := solana.JitoBundleStatus(cctx, l.HTTP, l.JitoURL, bundle)
+			cancel()
+			if err != nil {
+				st = "unknown: " + err.Error()
+			}
+			msg += fmt.Sprintf(" (jito bundle %s: %s)", bundle, st)
+		}
+		return Result{Signature: sig}, errors.New(msg)
 	}
 	bc, err := l.RPC.GetBalanceChange(ctx, sig, l.Key.PublicBase58(), o.Mint)
 	if err != nil {
@@ -370,11 +404,12 @@ func (l *Live) DryRun(ctx context.Context, o Order, as string) (solana.SimResult
 
 // confirm polls until the tx is confirmed (true), failed on-chain (error), or
 // its blockhash is no longer valid and it never landed (false).
-func (l *Live) confirm(ctx context.Context, sig, blockhash string, wait time.Duration) (bool, error) {
+func (l *Live) confirm(ctx context.Context, sig, blockhash string, wait time.Duration, resend func()) (bool, error) {
 	if wait <= 0 {
 		wait = 30 * time.Second
 	}
 	deadline := time.Now().Add(wait)
+	lastSend := time.Now()
 	for {
 		st, err := l.RPC.SignatureStatus(ctx, sig)
 		if err == nil && st.Found {
@@ -384,6 +419,9 @@ func (l *Live) confirm(ctx context.Context, sig, blockhash string, wait time.Dur
 			if st.ConfirmationStatus == "confirmed" || st.ConfirmationStatus == "finalized" {
 				return true, nil
 			}
+		} else if resend != nil && time.Since(lastSend) >= time.Second && time.Now().Before(deadline) {
+			resend()
+			lastSend = time.Now()
 		}
 		if time.Now().After(deadline) {
 			valid, verr := l.RPC.IsBlockhashValid(ctx, blockhash)

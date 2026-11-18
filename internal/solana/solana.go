@@ -652,3 +652,21 @@ func SendJitoBundle(ctx context.Context, c *http.Client, url string, txsBase58 [
 	err := postJSONRPC(ctx, c, url, "sendBundle", []any{txsBase58}, &id)
 	return id, err
 }
+
+// JitoBundleStatus is what Jito says happened to a bundle sent in the last few
+// minutes: "Pending", "Landed", "Failed" (lost the auction or failed simulation)
+// or "Invalid" (unknown or too old).
+func JitoBundleStatus(ctx context.Context, c *http.Client, url, id string) (string, error) {
+	var out struct {
+		Value []struct {
+			Status string `json:"status"`
+		} `json:"value"`
+	}
+	if err := postJSONRPC(ctx, c, url, "getInflightBundleStatuses", []any{[]string{id}}, &out); err != nil {
+		return "", err
+	}
+	if len(out.Value) == 0 {
+		return "", errors.New("no bundle status")
+	}
+	return out.Value[0].Status, nil
+}

@@ -305,3 +305,9 @@ Today's result is realized P&L plus open copies marked at the latest price (proc
 - Live mode checks the wallet's SOL every minute. Below one buy plus the fees to exit everything open, buys pause and an alert goes out; sells continue.
 - A buy with a deadline is not sent at all if the short-lived blockhash can't be fetched.
 - Don't restart the executor while a live buy is in flight: a buy that lands after the restart isn't recorded, and the tokens would sit in the wallet untracked.
+
+## First live buys didn't land (Nov 18)
+- The first three live buys (nad, same token, 13:25 to 13:32) were sent 0.35s after nad's trade as Jito bundles (0.0001 SOL tip, above the 75th percentile of landed tips) and never landed. Nothing was spent. A dropped bundle gives no error, and we hadn't kept the bundle id, so Jito's reason is unknown.
+- Buys now go as normal transactions through our RPC with the 0.0005 SOL priority fee (`JITO_TIP_SOL=0`), the same path sells already use.
+- Our RPC send uses `maxRetries: 0`, so a tx was passed on once and never again. The trader now re-sends the same signed tx every second until it lands or its blockhash expires. It is the same signature, so it can't fill twice.
+- If Jito is turned back on, a bundle's tx is also sent through our RPC, and an unlanded bundle's Jito status ("Failed", "Invalid"...) goes into the order's error. Failed orders now keep their signature so they can be looked up on-chain.

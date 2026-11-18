@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -686,5 +687,66 @@ func TestBuyNotSentWithoutShortBlockhash(t *testing.T) {
 	_, err := l.Execute(context.Background(), Order{Mint: "M", Side: "buy", SolIn: 0.1, At: now, Deadline: now.Add(1500 * time.Millisecond)})
 	if err == nil || sends.Load() != 0 {
 		t.Fatalf("sent %d without a short-lived blockhash (err %v)", sends.Load(), err)
+	}
+}
+
+// A bundle buy also goes through our RPC and is re-sent every second until it
+// lands or expires; if it never lands, Jito's verdict on the bundle is in the error.
+func TestBundleAlsoSentByRPCAndResent(t *testing.T) {
+	pk := ed25519.NewKeyFromSeed(make([]byte, 32))
+	kp, _ := solana.ParseKeypair(base58.Encode(pk))
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]string{base58.Encode(unsignedTx(kp.Public))})
+	}))
+	defer pp.Close()
+	var bundles atomic.Int32
+	jito := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Method string }
+		json.NewDecoder(r.Body).Decode(&req)
+		reply := func(v any) { json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": v}) }
+		switch req.Method {
+		case "sendBundle":
+			bundles.Add(1)
+			reply("BUNDLE1")
+		case "getInflightBundleStatuses":
+			reply(map[string]any{"value": []any{map[string]any{"bundle_id": "BUNDLE1", "status": "Failed"}}})
+		}
+	}))
+	defer jito.Close()
+	var sends atomic.Int32
+	sigs := map[string]bool{}
+	var mu sync.Mutex
+	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			Params []any  `json:"params"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		reply := func(v any) { json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": v}) }
+		switch req.Method {
+		case "sendTransaction":
+			sends.Add(1)
+			raw, _ := base64.StdEncoding.DecodeString(req.Params[0].(string))
+			tx, _ := solana.ParseTx(raw)
+			mu.Lock()
+			sigs[tx.Signature()] = true
+			mu.Unlock()
+			reply(tx.Signature())
+		case "getSignatureStatuses":
+			reply(map[string]any{"value": []any{nil}})
+		case "isBlockhashValid":
+			reply(map[string]any{"value": false})
+		}
+	}))
+	defer rpc.Close()
+	l := &Live{Key: kp, RPC: solana.NewRPC(rpc.URL), TradeURL: pp.URL, JitoURL: jito.URL, JitoTipSol: 0.0001,
+		MaxAttempts: 1, ConfirmWait: 2500 * time.Millisecond, HTTP: http.DefaultClient}
+	res, err := l.Execute(context.Background(), Order{Mint: "M", Side: "buy", SolIn: 0.1})
+	if err == nil || !strings.Contains(err.Error(), "jito bundle BUNDLE1: Failed") {
+		t.Fatalf("want the bundle's status in the error, got %v", err)
+	}
+	if bundles.Load() != 1 || sends.Load() < 3 || len(sigs) != 1 || res.Signature == "" {
+		t.Fatalf("bundles %d, rpc sends %d (want first + resends), distinct sigs %d (want 1), sig %q",
+			bundles.Load(), sends.Load(), len(sigs), res.Signature)
 	}
 }
