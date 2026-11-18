@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -193,7 +194,9 @@ func (in *Ingestor) HandleTrade(ctx context.Context, t model.Trade) {
 		line, _ := json.Marshal(source.FixtureLine{At: t.ReceivedAt, Msg: source.EncodePumpPortal(t)})
 		_, _ = in.Recorder.Write(append(line, '\n'))
 	}
-	t.IsTarget = in.tracked[t.Trader]
+	// An exit-check sell is always for a wallet we copied, even one dropped since:
+	// its open copies must still close.
+	t.IsTarget = in.tracked[t.Trader] || strings.HasPrefix(t.Signature, SignaturePrefix)
 	var subscribe bool
 	if t.IsTarget {
 		subscribe = in.trackHolding(t) && !in.g.paused

@@ -81,4 +81,14 @@ func TestExitCheck(t *testing.T) {
 	if err := r2.Check(ctx); err != nil || len(*pub2) != 0 {
 		t.Fatalf("false exit: %+v %v", *pub2, err)
 	}
+
+	// A wallet dropped since we copied it still gets its exit: its copies must close.
+	in3, _, st3, pub3 := setup(t)
+	st3.AddWallet(ctx, model.Wallet{Address: walletA, Status: model.StatusDropped})
+	in3.ReloadWallets(ctx)
+	st3.UpsertSimPosition(ctx, model.SimPosition{ID: "d", Wallet: walletA, Mint: mintX, DelayS: 2, OpenedAt: t0, Status: model.PosOpen})
+	r3 := &Reconciler{In: in3, Store: st3, Balances: &fakeBalances{}, Now: func() time.Time { return now }}
+	if err := r3.Check(ctx); err != nil || len(*pub3) != 1 || !(*pub3)[0].IsTarget {
+		t.Fatalf("dropped wallet's exit not passed on as its trade: %+v %v", *pub3, err)
+	}
 }

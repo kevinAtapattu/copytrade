@@ -86,7 +86,7 @@ func main() {
 	defer db.Close(ctx)
 	db0 = db
 	for _, pool := range []string{"pump", model.PoolPumpSwap} {
-		p, err := find(ctx, db, pool)
+		p, err := find(ctx, db, rpc, pool)
 		if err != nil {
 			check(pool+": pick a held token", false, err.Error())
 			continue
@@ -134,7 +134,7 @@ func main() {
 // expiry checks the late-buy cancel against the real chain.
 func expiry(ctx context.Context, l *exec.Live, rpc *solana.RPC, c config.Config, funded bool) {
 	fmt.Printf("late-buy cancel (EXEC_BUY_MAX_LAG=%s):\n", c.ExecBuyMaxLag)
-	p, err := find(ctx, db0, "pump")
+	p, err := find(ctx, db0, rpc, "pump")
 	if err != nil {
 		check("late buy: pick a token", false, err.Error())
 		return
@@ -172,15 +172,38 @@ func expiry(ctx context.Context, l *exec.Live, rpc *solana.RPC, c config.Config,
 }
 
 // find picks the newest token on pool that a tracked wallet bought and still holds.
-func find(ctx context.Context, db *pgx.Conn, pool string) (pick, error) {
-	var p pick
-	err := db.QueryRow(ctx, `select p.wallet, p.mint, t.pool, b.signature, b.sol_amount, b.token_amount, p.sol_usd
+// find picks a recent open paper copy whose wallet still holds the token (so it
+// can stand in as a seller) and whose buy was paid in SOL, like ours. Some wallets
+// buy with USDC through a router; their SOL barely moves.
+func find(ctx context.Context, db *pgx.Conn, rpc *solana.RPC, pool string) (pick, error) {
+	rows, err := db.Query(ctx, `select distinct on (p.opened_at, p.wallet, p.mint) p.wallet, p.mint, t.pool, b.signature, b.sol_amount, b.token_amount, p.sol_usd
 		from sim_positions p join tokens t on t.mint = p.mint
 		join lateral (select signature, sol_amount, token_amount from target_trades where wallet = p.wallet and mint = p.mint and side = 'buy'
 			and signature not like '%:%' order by received_at desc limit 1) b on true
 		where p.status = 'open' and p.delay_s = 2 and t.pool = $1
-		order by p.opened_at desc limit 1`, pool).Scan(&p.wallet, &p.mint, &p.pool, &p.buySig, &p.buySol, &p.buyTokens, &p.solUSD)
-	return p, err
+		order by p.opened_at desc limit 10`, pool)
+	if err != nil {
+		return pick{}, err
+	}
+	var ps []pick
+	for rows.Next() {
+		var p pick
+		if err := rows.Scan(&p.wallet, &p.mint, &p.pool, &p.buySig, &p.buySol, &p.buyTokens, &p.solUSD); err != nil {
+			return pick{}, err
+		}
+		ps = append(ps, p)
+	}
+	rows.Close()
+	for _, p := range ps {
+		if bal, _, err := rpc.OwnerTokenBalance(ctx, p.wallet, p.mint); err != nil || bal < 1 {
+			continue
+		}
+		if bc, err := rpc.GetBalanceChange(ctx, p.buySig, p.wallet, p.mint); err != nil || -bc.SolDelta < p.buySol/2 {
+			continue
+		}
+		return p, nil
+	}
+	return pick{}, fmt.Errorf("none of %d open copies on %s has a holder that paid in SOL", len(ps), pool)
 }
 
 func noFunds(e string) bool {

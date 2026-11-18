@@ -604,6 +604,11 @@ func (r *RPC) GetBalanceChange(ctx context.Context, sig, owner, mint string) (Ba
 		FeeSol:    float64(tx.Meta.Fee) / LamportsPerSol,
 		BlockTime: time.Unix(tx.BlockTime, 0),
 	}
+	// Wrapped SOL kept in a token account is still the owner's SOL: a wallet that
+	// pays from it shows almost no native change.
+	if mint != wsolMint {
+		bc.SolDelta += sumTok(tx.Meta.PostToken, owner, wsolMint) - sumTok(tx.Meta.PreToken, owner, wsolMint)
+	}
 	bc.TokenAfter = sumTok(tx.Meta.PostToken, owner, mint)
 	bc.TokenDelta = bc.TokenAfter - sumTok(tx.Meta.PreToken, owner, mint)
 	seen := map[string]bool{}
@@ -617,6 +622,8 @@ func (r *RPC) GetBalanceChange(ctx context.Context, sig, owner, mint string) (Ba
 	}
 	return bc, nil
 }
+
+const wsolMint = "So11111111111111111111111111111111111111112"
 
 type tokBal struct {
 	AccountIndex  int    `json:"accountIndex"`
