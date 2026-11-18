@@ -23,8 +23,8 @@ type Decision struct {
 	Window time.Duration
 }
 
-// Classify decides whether an event alerts on its own. Only failed sells and
-// safety stops do; trades and failed buys (a missed trade) go in the hourly
+// Classify decides whether an event alerts on its own. Only failed sells, low
+// SOL and safety stops do; trades and failed buys (a missed trade) go in the hourly
 // message. Pure, so it is unit-tested.
 func Classify(ev model.Event) Decision {
 	if ev.Kind == "error" && ev.Service == "executor" && dataString(ev, "side") == model.SideSell && dataString(ev, "status") == "failed" {
@@ -37,8 +37,11 @@ func Classify(ev model.Event) Decision {
 	switch {
 	case strings.Contains(m, "kill switch"):
 		return Decision{Now: true, Key: "kill", Window: 24 * time.Hour}
-	case strings.Contains(m, "daily loss limit"):
-		return Decision{Now: true, Key: "dayloss", Window: 24 * time.Hour}
+	case strings.Contains(m, "daily loss limit hit"):
+		// One per trading day: a 24h window could swallow the next day's stop.
+		return Decision{Now: true, Key: "dayloss:" + dataString(ev, "day"), Window: 24 * time.Hour}
+	case strings.Contains(m, "low sol balance"):
+		return Decision{Now: true, Key: "lowsol", Window: 6 * time.Hour}
 	}
 	return Decision{}
 }

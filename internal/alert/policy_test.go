@@ -113,3 +113,12 @@ func TestFailures(t *testing.T) {
 		t.Fatalf("got:\n%s\nwant:\n%s", h, want)
 	}
 }
+
+// The executor's low-SOL message (cmd/executor watchBalance) alerts at once.
+func TestLowSOLAlerts(t *testing.T) {
+	d := Classify(model.Event{Kind: "info", Service: "executor",
+		Message: "[LIVE] low SOL balance: 0.0100 SOL, need 0.2100 to buy and still pay every exit. New buys paused; sells continue."})
+	if !d.Now || d.Key != "lowsol" {
+		t.Fatalf("got %+v", d)
+	}
+}

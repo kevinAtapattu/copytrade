@@ -271,14 +271,12 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 	// With a deadline, fetch an older blockhash (while PumpPortal builds the tx) so
 	// the tx expires at the deadline: it lands in time or never, not a minute late.
 	var bh string
+	var bhErr error
 	bhDone := make(chan struct{})
 	if n := blocksLeft(o, time.Now()); n > 0 && n < solana.MaxBlockhashAge-10 {
 		go func() {
 			defer close(bhDone)
-			var err error
-			if bh, err = l.RPC.BlockhashExpiringIn(ctx, n); err != nil {
-				slog.Warn("no expiring blockhash; tx keeps its normal ~60s life", "err", err)
-			}
+			bh, bhErr = l.RPC.BlockhashExpiringIn(ctx, n)
 		}()
 	} else {
 		close(bhDone)
@@ -287,6 +285,10 @@ func (l *Live) once(ctx context.Context, o Order) (Result, error) {
 	<-bhDone
 	if err != nil {
 		return Result{}, err
+	}
+	if bhErr != nil {
+		// Without it the tx could land up to a minute late: don't send at all.
+		return Result{}, fmt.Errorf("no short-lived blockhash, buy not sent so it can't land late: %w", bhErr)
 	}
 	if bh != "" {
 		if err := tx.SetBlockhash(bh); err != nil {

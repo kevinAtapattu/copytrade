@@ -75,7 +75,8 @@ func New(src source.Source, st store.Store, b bus.Bus, cooldown, maxWatch time.D
 }
 
 // ReloadWallets diffs the DB wallet list against current subscriptions. Live and
-// bench wallets are tracked; paused and dropped ones are not. Paused wallets whose
+// bench wallets are tracked, plus any wallet the executor still holds a copy of;
+// otherwise paused and dropped ones are not. Paused wallets whose
 // pause has run out go back to the bench here.
 func (in *Ingestor) ReloadWallets(ctx context.Context) error {
 	ws, err := in.Store.ListWallets(ctx)
@@ -91,6 +92,15 @@ func (in *Ingestor) ReloadWallets(ctx context.Context) error {
 		if w.Status == model.StatusLive || w.Status == model.StatusBench || in.TrackPaused && w.Status == model.StatusPaused {
 			want[w.Address] = true
 		}
+	}
+	// Keep watching a wallet while the executor holds one of its copies, even if it
+	// was demoted or dropped meanwhile: we still need its sells to exit.
+	if ps, err := in.Store.ListLivePositions(ctx, store.LiveFilter{OpenOnly: true}); err == nil {
+		for _, p := range ps {
+			want[p.Wallet] = true
+		}
+	} else {
+		slog.Warn("open copies for watch list", "err", err)
 	}
 	in.mu.Lock()
 	var add, remove []string

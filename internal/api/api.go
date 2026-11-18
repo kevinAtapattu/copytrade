@@ -690,7 +690,13 @@ func (s *Server) executor(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	day := now.UTC().Truncate(24 * time.Hour)
+	// Same day as the executor's daily loss limit and the alerts (ALERT_TZ midnight).
+	loc, err := time.LoadLocation(s.Cfg.AlertTZ)
+	if err != nil {
+		loc = time.UTC
+	}
+	lt := now.In(loc)
+	day := time.Date(lt.Year(), lt.Month(), lt.Day(), 0, 0, 0, 0, loc)
 	var dayPnl, gapSum float64
 	gapN := 0
 	for _, p := range pos {

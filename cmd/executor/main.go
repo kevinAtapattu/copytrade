@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -25,7 +26,7 @@ func main() {
 	trader := buildTrader(c.LiveTrading, a)
 	ex := exec.New(trader, a.Store, a.Bus, price.New(a.Ctx, c.SolUSDFixed, c.SolUSDFallback), exec.Risk{
 		SizeUSD: c.ExecSizeUSD, MaxOpenPositions: c.MaxOpenPositions, StopLossPct: c.StopLossPct, DailyLossUSD: c.DailyLossLimitUSD,
-		BuyMaxLag: c.ExecBuyMaxLag,
+		BuyMaxLag: c.ExecBuyMaxLag, DayLoc: dayLoc(c.AlertTZ),
 	})
 	if err := ex.Load(a.Ctx, time.Now()); err != nil {
 		app.Fatal("load executor state", err)
@@ -33,6 +34,9 @@ func main() {
 	slog.Info("executor ready", "mode", trader.Mode(), "open", ex.OpenCount())
 	app.Emit(a.Ctx, a.Bus, "executor", "info", "executor started in "+trader.Mode()+" mode", nil)
 
+	if l, ok := trader.(*exec.Live); ok {
+		go watchBalance(a, ex, l)
+	}
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
@@ -108,4 +112,59 @@ func buildTrader(live bool, a *app.App) exec.Trader {
 	return &exec.Live{Key: kp, RPC: solana.NewRPC(c.SolanaRPCURL), TradeURL: c.PumpPortalTradeURL,
 		SlippagePct: c.ExecSlippagePct, PriorityFee: c.ExecPriorityFee, JitoTipSol: c.JitoTipSol, JitoURL: c.JitoURL, JupiterURL: c.JupiterURL,
 		MaxAttempts: c.ExecMaxAttempts, HTTP: &http.Client{Timeout: 15 * time.Second}, ConfirmWait: 30 * time.Second}
+}
+
+// dayLoc is the timezone the trading day resets in (the alerts' ALERT_TZ).
+func dayLoc(tz string) *time.Location {
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		slog.Warn("bad ALERT_TZ, trading day resets at UTC midnight", "tz", tz, "err", err)
+		return time.UTC
+	}
+	return loc
+}
+
+// watchBalance pauses buys while the wallet can't pay for one more buy plus the
+// exits of everything open (a copy we can't afford to sell is stuck), and says so.
+func watchBalance(a *app.App, ex *exec.Executor, l *exec.Live) {
+	const (
+		perTx = 0.001  // base + priority fee + Jito tip, with room
+		rent  = 0.0025 // a new token account
+	)
+	c := a.Cfg
+	px := price.New(a.Ctx, c.SolUSDFixed, c.SolUSDFallback)
+	low := false
+	check := func() {
+		bal, err := l.RPC.GetBalance(a.Ctx, l.Key.PublicBase58())
+		if err != nil {
+			slog.Warn("wallet balance", "err", err)
+			return
+		}
+		need := c.ExecSizeUSD/px.SOLUSD()*1.02 + rent + float64(ex.OpenCount()+1)*perTx + 2*perTx
+		if bal >= need {
+			if low {
+				ex.SetLowBalance("")
+				app.Emit(a.Ctx, a.Bus, "executor", "info", fmt.Sprintf("SOL balance back to %.4f SOL: buys resumed", bal), nil)
+			}
+			low = false
+			return
+		}
+		why := fmt.Sprintf("low SOL balance: %.4f SOL, need %.4f to buy and still pay every exit", bal, need)
+		ex.SetLowBalance(why)
+		if !low {
+			app.Emit(a.Ctx, a.Bus, "executor", "info", "[LIVE] "+why+". New buys paused; sells continue. Add SOL to "+l.Key.PublicBase58(), nil)
+		}
+		low = true
+	}
+	check()
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.Ctx.Done():
+			return
+		case <-t.C:
+			check()
+		}
+	}
 }

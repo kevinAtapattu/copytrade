@@ -3,6 +3,7 @@ package exec
 import (
 	"bytes"
 	"context"
+	"copytrade/internal/alert"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -131,7 +132,7 @@ func TestDailyLossLimit(t *testing.T) {
 	ex.HandleTrade(ctx, trd("b", "LIVE", "M1", "sell", 31, time.Minute, true, 1e6, 0)) // big loss
 	ex.HandleTrade(ctx, trd("c", "LIVE", "M2", "buy", 31, 2*time.Minute, true, 1e6, 1e6))
 	fs, _ := st.ListLiveFills(ctx, store.LiveFilter{})
-	if fs[0].Status != "rejected" || !strings.Contains(fs[0].Error, "daily loss") {
+	if fs[0].Status != "rejected" || !strings.Contains(fs[0].Error, "daily limit") {
 		t.Fatalf("expected daily loss rejection, got %+v", fs[0])
 	}
 	// next UTC day resets
@@ -536,5 +537,154 @@ func TestExecutorRejectsLateBuy(t *testing.T) {
 	ex.buy(ctx, tr)
 	if len(rec.orders) != 1 || rec.orders[0].Deadline.IsZero() {
 		t.Fatalf("fresh buy should go out with a deadline: %+v", rec.orders)
+	}
+}
+
+// The daily stop counts copies still open at their latest price, stays on after a
+// restart, alerts once (as the alerter classifies it), and lifts at local midnight.
+func TestDailyStopCountsOpenSurvivesRestartAndAlerts(t *testing.T) {
+	east, _ := time.LoadLocation("America/Toronto")
+	r := Risk{SizeUSD: 25, MaxOpenPositions: 5, DailyLossUSD: 10, DayLoc: east}
+	ex, st := setup(t, r)
+	var events []model.Event
+	ex.Bus.(*bus.Memory).Register(bus.StreamEvents, func(_ context.Context, b []byte) error {
+		var ev model.Event
+		json.Unmarshal(b, &ev)
+		events = append(events, ev)
+		return nil
+	})
+	ctx := context.Background()
+	ex.HandleTrade(ctx, trd("a", "LIVE", "M1", "buy", 50, 0, true, 1e6, 1e6))
+	// Someone else dumps M1: our open copy is down well over $10, nothing sold yet.
+	ex.HandleTrade(ctx, trd("x", "OTHER", "M1", "sell", 35, time.Second, false, 1e6, 0))
+	var hits []model.Event
+	for _, ev := range events {
+		if d := alert.Classify(ev); d.Now && strings.HasPrefix(d.Key, "dayloss:") {
+			hits = append(hits, ev)
+		}
+	}
+	if len(hits) != 1 || alert.Classify(hits[0]).Key != "dayloss:2026-09-01" {
+		t.Fatalf("want one daily-stop alert keyed by the day, got %+v", hits)
+	}
+	ex.HandleTrade(ctx, trd("y", "OTHER", "M1", "buy", 60, 2*time.Second, false, 1e6, 0)) // price recovers
+	ex.HandleTrade(ctx, trd("c", "LIVE", "M2", "buy", 31, time.Minute, true, 1e6, 1e6))
+	if f := fills(st); f["buy:rejected"] != 1 {
+		t.Fatalf("stop holds for the day even after a recovery: %v", f)
+	}
+	// Restart: a new executor on the same store keeps the stop.
+	ex2 := New(ex.Trader, st, bus.NewMemory(), price.Fixed(150), r)
+	ex2.Sync = true
+	if err := ex2.Load(ctx, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ex2.HandleTrade(ctx, trd("d", "LIVE", "M3", "buy", 31, time.Hour, true, 1e6, 1e6))
+	if f := fills(st); f["buy:rejected"] != 2 {
+		t.Fatalf("restart must keep the stop: %v", f)
+	}
+	// t0 is 08:00 Eastern; 16h later is the next Eastern day.
+	ex2.HandleTrade(ctx, trd("e", "LIVE", "M4", "buy", 31, 16*time.Hour+time.Minute, true, 1e6, 1e6))
+	if f := fills(st); f["buy:filled"] != 2 {
+		t.Fatalf("next day buys again: %v", f)
+	}
+}
+
+// A copy still exits with the wallet after the wallet is demoted.
+func TestSellsFollowDemotedWallet(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	ctx := context.Background()
+	ex.HandleTrade(ctx, trd("a", "LIVE", "M1", "buy", 40, 0, true, 1e6, 1e6))
+	st.SetWalletStatus(ctx, "LIVE", model.StatusBench, "demoted", t0)
+	if err := ex.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ex.HandleTrade(ctx, trd("b", "LIVE", "M1", "sell", 45, time.Minute, true, 1e6, 0))
+	if f := fills(st); f["sell:filled"] != 1 || ex.OpenCount() != 0 {
+		t.Fatalf("demoted wallet's sell not copied: %v", f)
+	}
+	ex.HandleTrade(ctx, trd("c", "LIVE", "M2", "buy", 40, 2*time.Minute, true, 1e6, 1e6))
+	if f := fills(st); f["buy:filled"] != 1 {
+		t.Fatalf("but its buys are not: %v", f)
+	}
+}
+
+// They sell while our buy is still landing: the sell waits for the buy and then
+// sells what it got.
+func TestSellDuringInflightBuy(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	ex.Sync = false
+	ctx := context.Background()
+	gate := make(chan struct{})
+	ex.Trader = &gated{Paper: ex.Trader.(Paper), gate: gate}
+	buy := trd("a", "LIVE", "M1", "buy", 40, 0, true, 1e6, 1e6)
+	buy.ReceivedAt = time.Now()
+	ex.HandleTrade(ctx, buy) // buy blocks in the trader until the gate opens
+	sell := trd("b", "LIVE", "M1", "sell", 45, 0, true, 1e6, 0)
+	sell.ReceivedAt = time.Now()
+	ex.HandleTrade(ctx, sell)
+	close(gate)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && fills(st)["sell:filled"] == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if f := fills(st); f["buy:filled"] != 1 || f["sell:filled"] != 1 || ex.OpenCount() != 0 {
+		t.Fatalf("want buy then sell, got %v (open %d)", f, ex.OpenCount())
+	}
+}
+
+type gated struct {
+	Paper
+	gate chan struct{}
+}
+
+func (g *gated) Execute(ctx context.Context, o Order) (Result, error) {
+	if o.Side == model.SideBuy {
+		<-g.gate
+	}
+	return g.Paper.Execute(ctx, o)
+}
+
+// While the wallet is short of SOL, buys are refused with the reason.
+func TestLowSOLPausesBuys(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	ctx := context.Background()
+	ex.SetLowBalance("low SOL balance: 0.0100 SOL")
+	ex.HandleTrade(ctx, trd("a", "LIVE", "M1", "buy", 40, 0, true, 1e6, 1e6))
+	fs, _ := st.ListLiveFills(ctx, store.LiveFilter{})
+	if len(fs) != 1 || fs[0].Status != "rejected" || !strings.Contains(fs[0].Error, "low SOL") {
+		t.Fatalf("got %+v", fs)
+	}
+	ex.SetLowBalance("")
+	ex.HandleTrade(ctx, trd("b", "LIVE", "M2", "buy", 40, time.Second, true, 1e6, 1e6))
+	if f := fills(st); f["buy:filled"] != 1 {
+		t.Fatalf("resumes when topped up: %v", f)
+	}
+}
+
+// If the short-lived blockhash can't be fetched, the buy is not sent: with a
+// normal blockhash it could land up to a minute late.
+func TestBuyNotSentWithoutShortBlockhash(t *testing.T) {
+	pk := ed25519.NewKeyFromSeed(make([]byte, 32))
+	kp, _ := solana.ParseKeypair(base58.Encode(pk))
+	pp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(unsignedTx(kp.Public)) }))
+	defer pp.Close()
+	var sends atomic.Int32
+	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Method string }
+		json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "getSlot":
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": 1000})
+		case "getBlock":
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"code": -32007, "message": "Slot was skipped"}})
+		case "sendTransaction":
+			sends.Add(1)
+		}
+	}))
+	defer rpc.Close()
+	l := &Live{Key: kp, RPC: solana.NewRPC(rpc.URL), TradeURL: pp.URL, MaxAttempts: 3, HTTP: http.DefaultClient}
+	now := time.Now()
+	_, err := l.Execute(context.Background(), Order{Mint: "M", Side: "buy", SolIn: 0.1, At: now, Deadline: now.Add(1500 * time.Millisecond)})
+	if err == nil || sends.Load() != 0 {
+		t.Fatalf("sent %d without a short-lived blockhash (err %v)", sends.Load(), err)
 	}
 }

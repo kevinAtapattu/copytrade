@@ -288,10 +288,20 @@ Dior was demoted 3.5h after "Make live" (score dipped to -0.50), and Swan flippe
 - A manual pick can go over LIVE_MAX; rotation only fills free slots.
 
 ## Going live: pilot first
-Paper and the +2s sim agree within about $1 on the same trades (nad +$29.78 paper vs +$30.69 sim over 19 trades), but that is one model agreeing with another. Real landing delay, failed txs, sandwiching, token account rent and SOL/USD are unmodeled, and the go/no-go bar (2-3 wallets positive 2+ weeks) isn't met yet. So the plan is a small pilot: one manual wallet, LIVE_MAX=0 so rotation can't put an auto-picked wallet on real money, $10 size, 2 open max, $20 daily loss limit, ~$60 in the wallet, judged on gap vs sim and failed tx rate after ~30 round trips.
+Paper and the +2s sim agree within about $1 on the same trades (nad +$29.78 paper vs +$30.69 sim over 19 trades), but that is one model agreeing with another. Real landing delay, failed txs, sandwiching, token account rent and SOL/USD are unmodeled, and the go/no-go bar (2-3 wallets positive 2+ weeks) isn't met yet. So the plan is a small pilot: one manual wallet, LIVE_MAX=0 so rotation can't put an auto-picked wallet on real money, $10 size, 2 open max, $50 daily loss limit (raised from $20 on Nov 18), ~$80 in the wallet, judged on gap vs sim and failed tx rate after ~30 round trips.
 
 ## Late buys cancel themselves (EXEC_BUY_MAX_LAG, default 10s)
 A Solana tx can't be recalled once sent; it can land any time until its blockhash is 150 blocks old (60-90s). A copy buy landing that late buys at a price unrelated to theirs. So a buy gets a deadline (their trade + EXEC_BUY_MAX_LAG): it isn't sent or retried past it, and it is signed with an older blockhash (getSlot + getBlock, fetched while PumpPortal builds the tx) chosen so the tx expires at the deadline. It lands in time or never. Measured on mainnet: asked for 3.2s of life, the blockhash stopped working after 2.1-3.2s, never later. Sells have no deadline: we always want out.
 
 ## Jito bundle falls back to a normal tx
 With JITO_TIP_SOL set, PumpPortal's bundle endpoint returns 400 ("isCashbackCoin") for sells of bonding-curve tokens (Nov 2026); buys and PumpSwap sells work. A bundle it won't build is rebuilt as a normal tx and sent through our RPC, so exits never depend on Jito.
+
+## Daily loss limit: counts open copies, holds for the day, survives restarts
+Today's result is realized P&L plus open copies marked at the latest price (proceeds so far + tokens x price - cost), so a copy that is down a lot counts before it closes. The day is ALERT_TZ midnight (Eastern), the same "today" as the alerts and the Executor page; it was UTC midnight. Once the limit is hit, new buys stop until midnight even if prices recover, the stop is saved in settings so a restart keeps it, and one alert goes out per day. Open copies keep following the wallet's sells and the stop loss; we don't dump them. At $10 a trade, nad's worst intraday low in November was about -$38, so $50 is a disaster stop, not a daily-noise stop. At $25 a trade it should be about $100-120: nad went -$71 on Nov 13 before ending +$30.
+
+## Other go-live fixes (Nov 18)
+- Sells are copied whatever the wallet's status, and ingest keeps watching a wallet while we hold a copy of it. Before, a demotion mid-position stopped us copying the exit.
+- A sell that arrives while our buy is still landing waits for the buy on the same worker, then sells what it got (nad sold within 10s of buying 17 times).
+- Live mode checks the wallet's SOL every minute. Below one buy plus the fees to exit everything open, buys pause and an alert goes out; sells continue.
+- A buy with a deadline is not sent at all if the short-lived blockhash can't be fetched.
+- Don't restart the executor while a live buy is in flight: a buy that lands after the restart isn't recorded, and the tokens would sit in the wallet untracked.

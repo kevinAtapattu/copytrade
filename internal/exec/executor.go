@@ -25,6 +25,8 @@ type Risk struct {
 	// BuyMaxLag: a buy that can't land within this long after their trade is
 	// cancelled, since we'd be buying at a price that no longer matches theirs. 0 = no limit.
 	BuyMaxLag time.Duration
+	// DayLoc sets when the trading day (and the daily loss limit) resets. nil = UTC.
+	DayLoc *time.Location
 }
 
 type Executor struct {
@@ -47,7 +49,10 @@ type Executor struct {
 	killed    bool
 	stopping  map[string]bool
 	dayStart  time.Time
-	dayPnl    float64
+	dayPnl    float64 // realized today
+	// dayStopped: the daily loss limit was hit today; no new buys until the day rolls.
+	dayStopped bool
+	lowSOL     string // why buys are paused for low SOL ("" = fine)
 }
 
 func New(t Trader, st store.Store, b bus.Bus, p price.Source, r Risk) *Executor {
@@ -83,6 +88,9 @@ func (e *Executor) Load(ctx context.Context, now time.Time) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.rollDay(now)
+	if v, _, err := e.Store.GetSetting(ctx, store.SettingDayStop); err == nil && v == e.dayKey() {
+		e.dayStopped = true
+	}
 	for i := range ps {
 		p := ps[i]
 		if p.Status == model.PosOpen {
@@ -119,10 +127,70 @@ func (e *Executor) refreshLocked(ctx context.Context) error {
 }
 
 func (e *Executor) rollDay(now time.Time) {
-	d := now.UTC().Truncate(24 * time.Hour)
-	if !d.Equal(e.dayStart) {
-		e.dayStart, e.dayPnl = d, 0
+	loc := e.Risk.DayLoc
+	if loc == nil {
+		loc = time.UTC
 	}
+	l := now.In(loc)
+	d := time.Date(l.Year(), l.Month(), l.Day(), 0, 0, 0, 0, loc)
+	if !d.Equal(e.dayStart) {
+		e.dayStart, e.dayPnl, e.dayStopped = d, 0, false
+	}
+}
+
+// dayKey names today for the daily stop setting: "<mode>:<date>".
+func (e *Executor) dayKey() string {
+	return e.Trader.Mode() + ":" + e.dayStart.Format("2006-01-02")
+}
+
+// dayResultLocked is today's realized P&L plus open copies marked at the latest
+// price (what they have returned so far, partial sells included). A copy with no
+// price yet counts as even.
+func (e *Executor) dayResultLocked() float64 {
+	v := e.dayPnl
+	for _, p := range e.positions {
+		if st, ok := e.curves[p.Mint]; ok && st.VTokens > 0 {
+			v += (p.ProceedsSol + st.Price()*p.TokensHeld - p.CostSol) * p.SolUSD
+		}
+	}
+	return v
+}
+
+// checkDayLocked trips the daily stop the moment today's result reaches the
+// limit, saves it so a restart keeps it, and announces it once.
+func (e *Executor) checkDayLocked(ctx context.Context, now time.Time) {
+	if e.dayStopped || e.Risk.DailyLossUSD <= 0 {
+		return
+	}
+	r := e.dayResultLocked()
+	if r > -e.Risk.DailyLossUSD {
+		return
+	}
+	e.dayStopped = true
+	if err := e.Store.SetSetting(ctx, store.SettingDayStop, e.dayKey()); err != nil {
+		slog.Warn("save daily stop", "err", err)
+	}
+	day := e.dayStart.Format("2006-01-02")
+	msg := fmt.Sprintf("[%s] daily loss limit hit: %s today (limit -$%.0f). No new buys until midnight; open copies still follow their sells and the stop loss.",
+		strings.ToUpper(e.Trader.Mode()), usdStr(r), e.Risk.DailyLossUSD)
+	slog.Warn("daily loss limit hit", "result_usd", r, "day", day)
+	_ = bus.PublishJSON(ctx, e.Bus, bus.StreamEvents, model.Event{Kind: "info", At: now, Service: "executor", Message: msg,
+		Data: map[string]any{"day": day, "result_usd": r}})
+}
+
+// SetLowBalance pauses buys while the wallet can't pay for one more buy and the
+// exits of everything open; "" resumes.
+func (e *Executor) SetLowBalance(why string) {
+	e.mu.Lock()
+	e.lowSOL = why
+	e.mu.Unlock()
+}
+
+func usdStr(v float64) string {
+	if v < 0 {
+		return fmt.Sprintf("-$%.2f", -v)
+	}
+	return fmt.Sprintf("+$%.2f", v)
 }
 
 // OpenCount returns open positions.
@@ -165,21 +233,33 @@ func (e *Executor) HandleTrade(ctx context.Context, t model.Trade) {
 		}
 	}
 
-	if t.IsTarget && e.live[t.Trader] {
+	if t.IsTarget {
 		k := pkey(t.Trader, t.Mint)
-		if t.Side == model.SideBuy {
+		switch {
+		case t.Side == model.SideBuy:
+			if !e.live[t.Trader] {
+				break
+			}
 			if reason := e.buyBlockLocked(k, t); reason == "" {
 				e.inflight[k] = true
 				jobs = append(jobs, func() { e.buy(ctx, t) })
 			} else if reason != "skip" {
 				jobs = append(jobs, func() { e.reject(ctx, t, reason) })
 			}
-		} else if p, ok := e.positions[k]; ok && !e.stopping[k] {
+		// Sells are copied whatever the wallet's status now: a copy we hold must
+		// still exit with them after a demotion.
+		case e.positions[k] != nil && !e.stopping[k]:
 			pct := sim.SellFraction(t) * 100
-			pos := p
+			pos := e.positions[k]
 			jobs = append(jobs, func() { e.sell(ctx, pos, pct, "copy", t) })
+		case e.inflight[k]:
+			// They sold while our buy was still landing. The job runs on the same
+			// worker after the buy, so it sells whatever the buy got.
+			pct := sim.SellFraction(t) * 100
+			jobs = append(jobs, func() { e.sellAfterBuy(ctx, k, pct, t) })
 		}
 	}
+	e.checkDayLocked(ctx, t.ReceivedAt)
 	e.mu.Unlock()
 
 	for _, j := range jobs {
@@ -198,8 +278,10 @@ func (e *Executor) buyBlockLocked(k string, t model.Trade) string {
 		return "not on a SOL bonding curve (migrated or non-SOL quote)"
 	case e.Risk.MaxOpenPositions > 0 && len(e.positions)+len(e.inflight) >= e.Risk.MaxOpenPositions:
 		return fmt.Sprintf("max open positions (%d)", e.Risk.MaxOpenPositions)
-	case e.Risk.DailyLossUSD > 0 && e.dayPnl <= -e.Risk.DailyLossUSD:
-		return fmt.Sprintf("daily loss limit hit (%.2f USD)", e.dayPnl)
+	case e.dayStopped:
+		return fmt.Sprintf("stopped for today: lost more than the $%.0f daily limit", e.Risk.DailyLossUSD)
+	case e.lowSOL != "":
+		return e.lowSOL
 	}
 	if _, ok := e.curves[t.Mint]; !ok {
 		return "no curve state"
@@ -279,6 +361,22 @@ func (e *Executor) buy(ctx context.Context, t model.Trade) {
 	e.record(ctx, f, p)
 }
 
+// sellAfterBuy copies a sell that arrived while our buy was in flight, if the
+// buy got us a position.
+func (e *Executor) sellAfterBuy(ctx context.Context, k string, pct float64, t model.Trade) {
+	e.mu.Lock()
+	p := e.positions[k]
+	if p == nil || e.stopping[k] {
+		e.mu.Unlock()
+		return
+	}
+	if pct >= 99.9 {
+		e.stopping[k] = true
+	}
+	e.mu.Unlock()
+	e.sell(ctx, p, pct, "copy", t)
+}
+
 func (e *Executor) sell(ctx context.Context, p *model.LivePosition, pct float64, reason string, t model.Trade) {
 	k := pkey(p.Wallet, p.Mint)
 	e.mu.Lock()
@@ -331,6 +429,7 @@ func (e *Executor) sell(ctx context.Context, p *model.LivePosition, pct float64,
 		e.rollDay(at)
 		e.dayPnl += (p.ProceedsSol - p.CostSol) * p.SolUSD
 	}
+	e.checkDayLocked(ctx, at)
 	snap := *p
 	e.recordLocked(ctx, f, &snap)
 }

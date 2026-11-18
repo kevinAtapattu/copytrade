@@ -310,6 +310,15 @@ func (r *RPC) GetSignaturesForAddress(ctx context.Context, addr, before string, 
 	return out, err
 }
 
+// GetBalance is owner's SOL balance.
+func (r *RPC) GetBalance(ctx context.Context, owner string) (float64, error) {
+	var res struct {
+		Value uint64 `json:"value"`
+	}
+	err := r.call(ctx, "getBalance", []any{owner, map[string]any{"commitment": "confirmed"}}, &res)
+	return float64(res.Value) / LamportsPerSol, err
+}
+
 // OwnerTokenBalance sums owner's balance of mint across all its token accounts
 // (any token program), in UI units. found=false when it has no account at all.
 func (r *RPC) OwnerTokenBalance(ctx context.Context, owner, mint string) (balance float64, found bool, err error) {

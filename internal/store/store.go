@@ -98,4 +98,6 @@ type Health struct {
 // Setting keys.
 const (
 	SettingKillSwitch = "kill_switch"
+	// SettingDayStop is "<mode>:<YYYY-MM-DD>" for the day the daily loss limit was hit.
+	SettingDayStop = "exec_day_stop"
 )

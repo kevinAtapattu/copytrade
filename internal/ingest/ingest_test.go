@@ -124,6 +124,25 @@ func TestDroppedWalletUnsubscribed(t *testing.T) {
 	}
 }
 
+// A dropped wallet stays watched while the executor holds a copy of it, so its
+// sell still gets copied; once the copy closes it is unsubscribed.
+func TestDroppedWalletWatchedWhileCopyOpen(t *testing.T) {
+	in, src, st, _ := setup(t)
+	ctx := context.Background()
+	st.UpsertLivePosition(ctx, model.LivePosition{ID: "p1", Mode: "live", Wallet: "W1", Mint: "M", Status: model.PosOpen, OpenedAt: t0})
+	st.SetWalletStatus(ctx, "W1", model.StatusDropped, "x", t0)
+	in.ReloadWallets(ctx)
+	if len(src.unsubA) != 0 {
+		t.Fatalf("unsubscribed a wallet we still hold a copy of: %v", src.unsubA)
+	}
+	at := t0.Add(time.Hour)
+	st.UpsertLivePosition(ctx, model.LivePosition{ID: "p1", Mode: "live", Wallet: "W1", Mint: "M", Status: model.PosClosed, OpenedAt: t0, ClosedAt: &at})
+	in.ReloadWallets(ctx)
+	if len(src.unsubA) != 1 || src.unsubA[0][0] != "W1" {
+		t.Fatalf("after the copy closed: unsub %v", src.unsubA)
+	}
+}
+
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 
 func TestRestoreWatchesAfterRestart(t *testing.T) {
