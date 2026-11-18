@@ -95,25 +95,25 @@ func main() {
 			if now.Sub(last) < c.AlertRollupEvery {
 				return
 			}
-			lines, mode, err := alert.ExecLines(a.Ctx, a.Store, last, now)
+			// Only the executor's current mode: the day it goes live, its paper copies
+			// from earlier must not count toward real P&L.
+			mode := map[bool]string{true: "live", false: "paper"}[c.LiveTrading]
+			lines, err := alert.ExecLines(a.Ctx, a.Store, mode, last, now)
 			if err != nil {
 				slog.Warn("hourly", "err", err)
 				return
 			}
 			local := now.In(loc)
 			midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-			day, _, err := alert.ExecLines(a.Ctx, a.Store, midnight, now)
+			day, err := alert.ExecLines(a.Ctx, a.Store, mode, midnight, now)
 			if err != nil {
 				slog.Warn("hourly (today)", "err", err)
 				return
 			}
-			fail, fmode, err := alert.ExecFailures(a.Ctx, a.Store, last, now)
+			fail, err := alert.ExecFailures(a.Ctx, a.Store, mode, last, now)
 			if err != nil {
 				slog.Warn("hourly (failures)", "err", err)
 				return
-			}
-			if mode == "" {
-				mode = fmode
 			}
 			send(alert.Hourly(mode, lines, day, fail)) // "" when nothing closed or failed: no message
 			setSetting(a.Ctx, a, keyRollupLast, now.Format(time.RFC3339Nano))

@@ -68,18 +68,17 @@ func (r *reporter) theirPct(ctx context.Context, trades []model.Trade, mint stri
 }
 
 // ExecLines returns the executor's copies that closed in (from, to], oldest
-// first, and the executor's mode ("" if none closed).
-func ExecLines(ctx context.Context, st store.Store, from, to time.Time) ([]CopyLine, string, error) {
+// first, for one executor mode ("paper" or "live").
+func ExecLines(ctx context.Context, st store.Store, mode string, from, to time.Time) ([]CopyLine, error) {
 	look := from.Add(-48 * time.Hour) // copies can open well before they close
-	ps, err := st.ListLivePositions(ctx, store.LiveFilter{Since: look})
+	ps, err := st.ListLivePositions(ctx, store.LiveFilter{Mode: mode, Since: look})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	r := newReporter(ctx, st)
 	trades := map[string][]model.Trade{} // wallet|mint -> their trades
 	var out []CopyLine
 	var at []time.Time
-	mode := ""
 	for _, p := range ps {
 		if p.Status == model.PosOpen || p.ClosedAt == nil || !p.ClosedAt.After(from) || p.ClosedAt.After(to) {
 			continue
@@ -95,7 +94,6 @@ func ExecLines(ctx context.Context, st store.Store, from, to time.Time) ([]CopyL
 		}
 		out = append(out, l)
 		at = append(at, *p.ClosedAt)
-		mode = p.Mode
 	}
 	idx := make([]int, len(out))
 	for i := range idx {
@@ -106,18 +104,17 @@ func ExecLines(ctx context.Context, st store.Store, from, to time.Time) ([]CopyL
 	for i, j := range idx {
 		sorted[i] = out[j]
 	}
-	return sorted, mode, nil
+	return sorted, nil
 }
 
 // ExecFailures counts the executor's buys and sells sent in (from, to] that
-// failed after all retries, and the executor's mode ("" if none).
-func ExecFailures(ctx context.Context, st store.Store, from, to time.Time) (Failures, string, error) {
-	fs, err := st.ListLiveFills(ctx, store.LiveFilter{Since: from})
+// failed after all retries.
+func ExecFailures(ctx context.Context, st store.Store, mode string, from, to time.Time) (Failures, error) {
+	fs, err := st.ListLiveFills(ctx, store.LiveFilter{Mode: mode, Since: from})
 	if err != nil {
-		return Failures{}, "", err
+		return Failures{}, err
 	}
 	var out Failures
-	mode := ""
 	for _, f := range fs {
 		if f.Status != "failed" || !f.SentAt.After(from) || f.SentAt.After(to) {
 			continue
@@ -127,9 +124,8 @@ func ExecFailures(ctx context.Context, st store.Store, from, to time.Time) (Fail
 		} else {
 			out.Buys++
 		}
-		mode = f.Mode
 	}
-	return out, mode, nil
+	return out, nil
 }
 
 // WalletName is the wallet's label, or its short address.
