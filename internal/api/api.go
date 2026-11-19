@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/overview", s.overview)
 	m.HandleFunc("GET /api/calendar", s.calendar)
+	m.HandleFunc("GET /api/other-coins", s.otherCoins)
 	m.HandleFunc("GET /api/wallets", s.wallets)
 	m.HandleFunc("POST /api/wallets", s.addWallet)
 	m.HandleFunc("GET /api/wallets/{addr}", s.walletDetail)

@@ -20,6 +20,7 @@ const groups: { title: string; links: NavLink[] }[] = [
     { href: "/wallets", label: "Wallets", hint: "Every wallet we copy, ranked", watching: true, tab: "Wallets", icon: "list" },
     { href: "/calendar", label: "P&L calendar", hint: "Paper profit by day", tab: "Calendar", icon: "calendar" },
     { href: "/trades", label: "Trade log", hint: "Their trades and our copies", watching: true },
+    { href: "/other-coins", label: "Other coins", hint: "How the copied wallet does on coins priced in other tokens" },
   ] },
   { title: "Find & trade", links: [
     { href: "/discovery", label: "Discovery", hint: "New wallets found automatically", watching: true },
