@@ -4,8 +4,61 @@ import { Calendar, DayDetail, MonthGrid, fmtDay, keptHint, monthTotals, useMonth
 import { Err, Seg, Stat } from "@/components/ui";
 import { useApi, useWalletNames } from "@/lib/api";
 import { pnlClass, short, usd } from "@/lib/format";
+import { useView } from "@/lib/view";
 
 export default function CalendarPage() {
+  const { view, ready } = useView();
+  if (!ready) return <div className="empty">Loading...</div>;
+  return view === "real" ? <RealCalendar /> : <PaperCalendar />;
+}
+
+// RealCalendar is your wallet's actual result each day: the auto-trader's real
+// trades, counted on the day they closed. The wallet you copied shows small: what
+// the same trades made them, scaled to what you put in.
+function RealCalendar() {
+  const [sel, setSel] = useState<string | null>(null);
+  const { data, error } = useApi<Calendar>("calendar?mode=live", 60000);
+  const { data: detail } = useApi<Calendar>(sel ? `calendar?mode=live&date=${sel}` : null, 60000);
+  const { names } = useWalletNames();
+  const name = (a: string) => names.get(a) ?? short(a);
+  const today = data?.today ?? "";
+  const month = useMonth(today, data?.days);
+  const { name: monthName, monthDays } = month;
+  const { us, them, green, best, worst } = monthTotals(monthDays);
+  const copied = (data?.wallets ?? []).map((w) => name(w.address));
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h2>P&amp;L calendar</h2>
+          <div className="sub">
+            Real money: what your wallet made each day{copied.length ? <> copying {copied.join(", ")}</> : ""}, after all fees,
+            counted on the day each trade closed (Eastern time). Small: what the same trades made {copied.length === 1 ? copied[0] : "the wallet you copied"},
+            scaled to what you put in. Click a day for its trades.
+          </div>
+        </div>
+      </div>
+      <Err error={error} />
+      <div className="grid stats">
+        <Stat label={`${monthName}, real`} value={usd(us, true)} tone={us}
+          hint={monthDays.length ? keptHint(us, them) : "no trades closed yet"} />
+        <Stat label="Green days" value={monthDays.length ? `${green} of ${monthDays.length}` : "-"} hint="days you ended up" />
+        <Stat label="Best day" value={best ? usd(best.us_usd, true) : "-"} tone={best?.us_usd} hint={best ? fmtDay(best.date) : " "} />
+        <Stat label="Worst day" value={worst ? usd(worst.us_usd, true) : "-"} tone={worst?.us_usd} hint={worst ? fmtDay(worst.date) : " "} />
+        <Stat label="Still open" value={usd(data?.open_usd, true)} tone={data?.open ? data.open_usd : undefined}
+          hint={`${data?.open ?? 0} trade${data?.open === 1 ? "" : "s"}, not counted until closed`} />
+      </div>
+      <div className="card" style={{ marginTop: 14 }}>
+        {data ? <MonthGrid days={data.days ?? []} today={today} month={month} sel={sel} onSelect={setSel} />
+          : !error && <div className="empty">Loading...</div>}
+      </div>
+      {sel && <DayDetail key={sel} date={sel} day={detail?.day} name={name} onClose={() => setSel(null)}
+        size="real trades" themHint="their result on the same tokens, scaled to what you put in" />}
+    </>
+  );
+}
+
+function PaperCalendar() {
   const [delay, setDelay] = useState(2);
   const [mode, setMode] = useState<"win" | "3" | "5" | "all">("win");
   const [wallet, setWallet] = useState("");

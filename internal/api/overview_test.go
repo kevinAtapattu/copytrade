@@ -61,3 +61,35 @@ func TestOverviewRealMoney(t *testing.T) {
 		t.Fatalf("wallet %+v, %d balance reads (want 1, cached)", got.Wallet, calls)
 	}
 }
+
+// The real-money calendar counts only live copies, by the day they closed.
+func TestCalendarRealMoney(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemory()
+	now := time.Date(2026, 11, 18, 23, 0, 0, 0, time.UTC)
+	closed := now.Add(-time.Hour)
+	st.UpsertLivePosition(ctx, model.LivePosition{ID: "l1", Mode: "live", Wallet: "NAD", Mint: "A", OpenedAt: now.Add(-2 * time.Hour),
+		ClosedAt: &closed, Status: model.PosClosed, CostSol: 0.1, ProceedsSol: 0.12, SolUSD: 100})
+	st.UpsertLivePosition(ctx, model.LivePosition{ID: "p1", Mode: "paper", Wallet: "NAD", Mint: "B", OpenedAt: now.Add(-2 * time.Hour),
+		ClosedAt: &closed, Status: model.PosClosed, CostSol: 0.1, ProceedsSol: 0.5, SolUSD: 100})
+	st.UpsertSimPosition(ctx, model.SimPosition{ID: "s1", Wallet: "NAD", Mint: "C", DelayS: 2, OpenedAt: now.Add(-2 * time.Hour),
+		ClosedAt: &closed, Status: model.PosClosed, CostSol: 0.25, ProceedsSol: 1, SolUSD: 100})
+	s := New(st, nil, nil, config.Config{LiveTrading: true, AlertTZ: "UTC", RotationDelayS: 2})
+	s.Now = func() time.Time { return now }
+	w := httptest.NewRecorder()
+	s.calendar(w, httptest.NewRequest("GET", "/api/calendar?mode=live", nil))
+	var got struct {
+		Real bool `json:"real"`
+		Days []struct {
+			Date   string  `json:"date"`
+			UsUSD  float64 `json:"us_usd"`
+			Closed int     `json:"closed"`
+		} `json:"days"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err, w.Body.String())
+	}
+	if !got.Real || len(got.Days) != 1 || got.Days[0].Closed != 1 || got.Days[0].UsUSD != 2 {
+		t.Fatalf("want one day with the live copy's +$2 only: %+v", got)
+	}
+}

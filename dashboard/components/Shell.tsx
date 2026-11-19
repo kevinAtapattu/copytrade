@@ -3,17 +3,20 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { EventsContext, useApi, useEventsState } from "@/lib/api";
 import { help } from "@/lib/glossary";
+import { ViewProvider, useView } from "@/lib/view";
+import { Seg } from "@/components/ui";
 
 // Grouped by what a trader is trying to do, in the order they'd do it.
-const groups: { title: string; links: { href: string; label: string; hint: string }[] }[] = [
+// watching: pages about everyone we watch, hidden in the real-money view.
+const groups: { title: string; links: { href: string; label: string; hint: string; watching?: boolean }[] }[] = [
   { title: "Results", links: [
     { href: "/", label: "Overview", hint: "How the paper copies are doing today" },
-    { href: "/wallets", label: "Wallets", hint: "Every wallet we copy, ranked" },
+    { href: "/wallets", label: "Wallets", hint: "Every wallet we copy, ranked", watching: true },
     { href: "/calendar", label: "P&L calendar", hint: "Paper profit by day" },
-    { href: "/trades", label: "Trade log", hint: "Their trades and our copies" },
+    { href: "/trades", label: "Trade log", hint: "Their trades and our copies", watching: true },
   ] },
   { title: "Find & trade", links: [
-    { href: "/discovery", label: "Discovery", hint: "New wallets found automatically" },
+    { href: "/discovery", label: "Discovery", hint: "New wallets found automatically", watching: true },
     { href: "/executor", label: "Auto-trader", hint: "Copies live wallets, with safety limits" },
   ] },
   { title: "System", links: [
@@ -26,36 +29,52 @@ type Health = { services?: { executor?: { data?: { mode?: string } } } };
 
 export default function Shell({ children }: { children: React.ReactNode }) {
   const events = useEventsState();
-  const path = usePathname();
   return (
     <EventsContext.Provider value={events}>
-      <div className="shell">
-        <nav className="nav" aria-label="Main">
-          <Link href="/" className="brand">copytrade</Link>
-          <ModeBadge />
-          <div className="nav-row">
-          {groups.map((g) => (
-            <div className="nav-group" key={g.title}>
-              <div className="nav-title">{g.title}</div>
-              {g.links.map((l) => {
-                const active = l.href === "/" ? path === "/" : path.startsWith(l.href);
-                return (
-                  <Link key={l.href} href={l.href} className={active ? "active" : ""} aria-current={active ? "page" : undefined} title={l.hint}>
-                    {l.label}
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
-          </div>
-          <div className="conn" title="Live updates from the backend. Pages also refresh on their own.">
-            <span className="dot" style={{ background: events.connected ? "var(--good)" : "var(--critical)" }} />
-            {events.connected ? "Live updates on" : "Live updates offline"}
-          </div>
-        </nav>
-        <main className="main">{children}</main>
-      </div>
+      <ViewProvider>
+        <div className="shell">
+          <Nav connected={events.connected} />
+          <main className="main">{children}</main>
+        </div>
+      </ViewProvider>
     </EventsContext.Provider>
+  );
+}
+
+function Nav({ connected }: { connected: boolean }) {
+  const path = usePathname();
+  const { view, setView, live } = useView();
+  return (
+    <nav className="nav" aria-label="Main">
+      <Link href="/" className="brand">copytrade</Link>
+      <ModeBadge />
+      {live && (
+        <div style={{ marginBottom: 10 }}>
+        <Seg value={view} onChange={setView} options={[
+          { v: "real", label: "Real money", title: "Only your wallet and the wallets you copy" },
+          { v: "all", label: "Everything", title: "Every wallet we watch, with paper copies" }]} />
+        </div>
+      )}
+      <div className="nav-row">
+      {groups.map((g) => ({ ...g, links: g.links.filter((l) => view === "all" || !l.watching) })).filter((g) => g.links.length).map((g) => (
+        <div className="nav-group" key={g.title}>
+          <div className="nav-title">{g.title}</div>
+          {g.links.map((l) => {
+            const active = l.href === "/" ? path === "/" : path.startsWith(l.href);
+            return (
+              <Link key={l.href} href={l.href} className={active ? "active" : ""} aria-current={active ? "page" : undefined} title={l.hint}>
+                {l.label}
+              </Link>
+            );
+          })}
+        </div>
+      ))}
+      </div>
+      <div className="conn" title="Live updates from the backend. Pages also refresh on their own.">
+        <span className="dot" style={{ background: connected ? "var(--good)" : "var(--critical)" }} />
+        {connected ? "Live updates on" : "Live updates offline"}
+      </div>
+    </nav>
   );
 }
 

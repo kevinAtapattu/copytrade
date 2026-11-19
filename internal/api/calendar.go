@@ -277,8 +277,20 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.Now()
 	since := now.AddDate(0, 0, -120)
-	ps, err := s.Store.ListSimPositions(ctx, store.SimFilter{Wallet: wallet, DelayS: delay, Since: since})
-	if err != nil {
+	real := q.Get("mode") == "live"
+	var ps []model.SimPosition
+	if real {
+		// Real money: the auto-trader's live copies, every wallet it copied.
+		pick = "all"
+		lps, err := s.Store.ListLivePositions(ctx, store.LiveFilter{Mode: "live", Wallet: wallet, Since: since})
+		if err != nil {
+			fail(w, 500, err)
+			return
+		}
+		for _, p := range lps {
+			ps = append(ps, liveAsSim(p))
+		}
+	} else if ps, err = s.Store.ListSimPositions(ctx, store.SimFilter{Wallet: wallet, DelayS: delay, Since: since}); err != nil {
 		fail(w, 500, err)
 		return
 	}
@@ -319,7 +331,7 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	in := calInput{ps: ps, outs: outs, their: their, loc: loc, now: now, pick: pick, n: n, positiveOnly: strict}
 	res := buildCalendar(in)
 
-	out := map[string]any{"tz": loc.String(), "delay": delay, "pick": pick, "n": n, "today": dayOf(now, loc),
+	out := map[string]any{"tz": loc.String(), "delay": delay, "pick": pick, "n": n, "today": dayOf(now, loc), "real": real,
 		"days": res.Days, "open_usd": res.OpenUSD, "open": res.Open,
 		"strict": strict, "picks_today": picksFor(dayOf(now, loc), in)}
 	if pick == "winners" {

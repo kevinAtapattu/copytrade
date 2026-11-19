@@ -6,6 +6,7 @@ import { Err, Seg, Stat, Table, WalletName } from "@/components/ui";
 import { LiveFill, LivePosition, Point, SimPosition, useApi, useEvents, useWalletNames } from "@/lib/api";
 import { ago, num, pnlClass, short, sol, usd } from "@/lib/format";
 import { help } from "@/lib/glossary";
+import { useView } from "@/lib/view";
 
 type Overview = {
   delay: number; scope: string; wallet_counts: Record<string, number>; bankroll_usd: number;
@@ -19,21 +20,15 @@ type Overview = {
 };
 
 export default function OverviewPage() {
-  // "" = follow the executor: real money when it trades live, else paper copies.
-  const [pick, setPick] = useState<"" | "real" | "paper">("");
-  const { data } = useApi<Overview>("overview?mode=live");
-  const real = pick === "real" || (pick === "" && data?.run_mode === "live");
-  const toggle = data?.run_mode === "live" && (
-    <Seg value={real ? "real" : "paper"} onChange={setPick} options={[
-      { v: "real", label: "Real money", title: "What the auto-trader is doing with your wallet" },
-      { v: "paper", label: "Paper copies", title: "$25 simulated copies of every wallet, for picking who to copy" }]} />
-  );
-  return real && data ? <RealOverview data={data} toggle={toggle} /> : <PaperOverview toggle={toggle} />;
+  const { view, ready } = useView();
+  const { data } = useApi<Overview>(ready && view === "real" ? "overview?mode=live" : null);
+  if (!ready || (view === "real" && !data)) return <div className="empty">Loading...</div>;
+  return view === "real" && data ? <RealOverview data={data} /> : <PaperOverview />;
 }
 
 // RealOverview is the live wallet: its balance, what the auto-trader made, and
 // its open trades and orders. Only the wallets being copied appear.
-function RealOverview({ data, toggle }: { data: Overview; toggle: React.ReactNode }) {
+function RealOverview({ data }: { data: Overview }) {
   const { names } = useWalletNames();
   const { data: ex } = useApi<{ fills: LiveFill[] | null }>("executor?mode=live&limit=15", 10000);
   const t = data.exec_today;
@@ -50,7 +45,6 @@ function RealOverview({ data, toggle }: { data: Overview; toggle: React.ReactNod
             copying {who.length ? who.join(", ") : "no one yet"}. Results are after all fees.
           </div>
         </div>
-        <div className="row">{toggle}</div>
       </div>
       <div className="grid stats">
         <Stat label="Wallet balance" value={w ? (w.sol_usd ? usd(w.balance_sol * w.sol_usd) : sol(w.balance_sol)) : "-"}
@@ -79,7 +73,8 @@ function RealOverview({ data, toggle }: { data: Overview; toggle: React.ReactNod
         </div>
         <div className="card">
           <h3>Recent orders</h3>
-          <Table rows={ex?.fills ?? []} rowKey={(f) => f.id} empty="No real orders yet. The first one goes out on the next buy by a wallet you copy."
+          <div className="sub" style={{ marginBottom: 8 }}>Skipped buys of coins priced in something other than SOL are left out; the Auto-trader page lists them.</div>
+          <Table rows={(ex?.fills ?? []).filter((f) => !f.error?.startsWith("not on a SOL bonding curve"))} rowKey={(f) => f.id} empty="No real orders yet. The first one goes out on the next buy by a wallet you copy."
             cols={[
               { key: "t", label: "Sent", render: (f) => new Date(f.sent_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) },
               { key: "side", label: "Order", render: (f) => `${f.side}${f.reason !== "copy" ? ` (${f.reason.replace(/_/g, " ")})` : ""}` },
@@ -102,7 +97,7 @@ function RealOverview({ data, toggle }: { data: Overview; toggle: React.ReactNod
   );
 }
 
-function PaperOverview({ toggle }: { toggle: React.ReactNode }) {
+function PaperOverview() {
   const [delay, setDelay] = useState(2);
   const [scope, setScope] = useState<"" | "all">("");
   const [execView, setExecView] = useState<"" | "paper" | "live">("");
@@ -129,7 +124,6 @@ function PaperOverview({ toggle }: { toggle: React.ReactNode }) {
           </div>
         </div>
         <div className="row">
-          {toggle}
           <Seg value={effScope} onChange={setScope} options={[
             { v: "", label: "Live wallets", title: help("liveWallet") }, { v: "all", label: "All watched", title: help("watching") }]} />
           <Seg value={delay} onChange={setDelay} options={[2, 10, 60].map((d) => ({ v: d, label: `+${d}s`, title: help("delay") }))} />

@@ -292,9 +292,14 @@ func (s *Server) walletInfo(ctx context.Context, mode string) map[string]any {
 }
 
 func valueLive(p model.LivePosition, tok *model.Token, fees curve.Fees, now time.Time) score.Outcome {
-	sp := model.SimPosition{Status: p.Status, ClosedAt: p.ClosedAt, OpenedAt: p.OpenedAt, CostSol: p.CostSol,
-		ProceedsSol: p.ProceedsSol, TokensHeld: p.TokensHeld, SolUSD: p.SolUSD}
-	return score.Value(sp, tok, fees, now)
+	return score.Value(liveAsSim(p), tok, fees, now)
+}
+
+// liveAsSim views an auto-trader position as a paper one, so the same valuing,
+// calendar and their-result code applies to real money.
+func liveAsSim(p model.LivePosition) model.SimPosition {
+	return model.SimPosition{ID: p.ID, Wallet: p.Wallet, Mint: p.Mint, Status: p.Status, ClosedAt: p.ClosedAt, OpenedAt: p.OpenedAt,
+		CostSol: p.CostSol, ProceedsSol: p.ProceedsSol, TokensHeld: p.TokensHeld, SolUSD: p.SolUSD}
 }
 
 func dailySeries(outs []score.Outcome) []point {

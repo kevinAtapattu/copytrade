@@ -106,8 +106,9 @@ export function MonthGrid({ days, today, month, sel, onSelect, children }: {
 }
 
 // One day's closed copies, as a tab per trader (one tab when showing a single wallet).
-export function DayDetail({ date, day, name, note, onClose }: {
+export function DayDetail({ date, day, name, note, onClose, size = "$25 copies", themHint = "their trades, scaled to $25" }: {
   date: string; day?: Day; name: (a: string) => string; note?: React.ReactNode; onClose: () => void;
+  size?: string; themHint?: string; // what "us" and "them" mean, for the stat hints
 }) {
   const ws = day?.wallets ?? [];
   const [tab, setTab] = useState(0);
@@ -134,8 +135,8 @@ export function DayDetail({ date, day, name, note, onClose }: {
           )}
           <div role={ws.length > 1 ? "tabpanel" : undefined}>
             <div className="grid stats" style={{ marginBottom: 12 }}>
-              <Stat label="Us" value={usd(w.us_usd, true)} tone={w.us_usd} hint={`our $25 copies`} />
-              <Stat label="Them" value={usd(w.them_usd, true)} tone={w.them_usd} hint="their trades, scaled to $25" />
+              <Stat label="Us" value={usd(w.us_usd, true)} tone={w.us_usd} hint={`our ${size}`} />
+              <Stat label="Them" value={usd(w.them_usd, true)} tone={w.them_usd} hint={themHint} />
               <Stat label="Us minus them" value={usd(w.us_usd - w.them_usd, true)} hint="what copying late cost or gained" />
               <Stat label="Closed" value={`${w.won} of ${w.closed} won`} hint={w.address.slice(0, 4) + ".." + w.address.slice(-4)} />
             </div>
