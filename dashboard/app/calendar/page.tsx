@@ -39,7 +39,13 @@ function RealCalendar() {
         </div>
       </div>
       <Err error={error} />
-      <div className="grid stats">
+      <div className="card">
+        {data ? <MonthGrid days={data.days ?? []} today={today} month={month} sel={sel} onSelect={setSel} />
+          : !error && <div className="empty">Loading...</div>}
+      </div>
+      {sel && <DayDetail key={sel} date={sel} day={detail?.day} name={name} onClose={() => setSel(null)}
+        size="real trades" themHint="their result on the same tokens, scaled to what you put in" />}
+      <div className="grid stats" style={{ marginTop: 14 }}>
         <Stat label={`${monthName}, real`} value={usd(us, true)} tone={us}
           hint={monthDays.length ? keptHint(us, them) : "no trades closed yet"} />
         <Stat label="Green days" value={monthDays.length ? `${green} of ${monthDays.length}` : "-"} hint="days you ended up" />
@@ -48,12 +54,6 @@ function RealCalendar() {
         <Stat label="Still open" value={usd(data?.open_usd, true)} tone={data?.open ? data.open_usd : undefined}
           hint={`${data?.open ?? 0} trade${data?.open === 1 ? "" : "s"}, not counted until closed`} />
       </div>
-      <div className="card" style={{ marginTop: 14 }}>
-        {data ? <MonthGrid days={data.days ?? []} today={today} month={month} sel={sel} onSelect={setSel} />
-          : !error && <div className="empty">Loading...</div>}
-      </div>
-      {sel && <DayDetail key={sel} date={sel} day={detail?.day} name={name} onClose={() => setSel(null)}
-        size="real trades" themHint="their result on the same tokens, scaled to what you put in" />}
     </>
   );
 }
@@ -130,24 +130,7 @@ function PaperCalendar() {
         </div>
       </div>
       <Err error={error} />
-      <div className="grid stats">
-        <Stat label={`${monthName}, us`} value={usd(us, true)} tone={us}
-          hint={monthDays.length ? keptHint(us, them) : "no closes yet"} />
-        <Stat label="Green days" value={monthDays.length ? `${green} of ${monthDays.length}` : "-"} hint="days we ended up" />
-        <Stat label="Best day" value={best ? usd(best.us_usd, true) : "-"} tone={best?.us_usd} hint={best ? fmtDay(best.date) : " "} />
-        <Stat label="Worst day" value={worst ? usd(worst.us_usd, true) : "-"} tone={worst?.us_usd} hint={worst ? fmtDay(worst.date) : " "} />
-        {win ? (
-          <Stat label="Best traders" value={data?.winners?.length ? `${data.winners.length} wallet${data.winners.length > 1 ? "s" : ""}` : "none yet"}
-            hint={(data?.winners ?? []).slice(0, 3).map((w) => `${name(w.address)} ${usd(w.us_usd, true)}`).join(", ") || " "} />
-        ) : best_ ? (
-          <Stat label="Copying today" value={data?.picks_today?.length ? data.picks_today.map(name).join(", ") : "nobody qualifies"}
-            hint={`${data?.open ?? 0} open copies, ${usd(data?.open_usd, true)} now`} />
-        ) : (
-          <Stat label="Still open" value={usd(data?.open_usd, true)} tone={data?.open_usd} hint={`${data?.open ?? 0} copies`} />
-        )}
-      </div>
-
-      <div className="card" style={{ marginTop: 14 }}>
+      <div className="card">
         <MonthGrid days={data.days ?? []} today={today} month={month} sel={sel} onSelect={setSel}>
         {best_ && strict && data && (data.days ?? []).length === 0 && (
           <div className="note" role="status">
@@ -163,10 +146,25 @@ function PaperCalendar() {
         )}
         </MonthGrid>
       </div>
-
       {sel && <DayDetail key={`${sel}${q}`} date={sel} day={detail?.day} name={name} onClose={() => setSel(null)}
         note={best_ && <>Picked that morning (top {mode}): {detail?.day?.picks?.length ? detail.day.picks.map(name).join(", ") : "nobody had 5+ closed copies yet"}.
           Copies that closed today could have been opened on an earlier day, when that day&apos;s picks applied.</>} />}
+      <div className="grid stats" style={{ marginTop: 14 }}>
+        <Stat label={`${monthName}, us`} value={usd(us, true)} tone={us}
+          hint={monthDays.length ? keptHint(us, them) : "no closes yet"} />
+        <Stat label="Green days" value={monthDays.length ? `${green} of ${monthDays.length}` : "-"} hint="days we ended up" />
+        <Stat label="Best day" value={best ? usd(best.us_usd, true) : "-"} tone={best?.us_usd} hint={best ? fmtDay(best.date) : " "} />
+        <Stat label="Worst day" value={worst ? usd(worst.us_usd, true) : "-"} tone={worst?.us_usd} hint={worst ? fmtDay(worst.date) : " "} />
+        {win ? (
+          <Stat label="Best traders" value={data?.winners?.length ? `${data.winners.length} wallet${data.winners.length > 1 ? "s" : ""}` : "none yet"}
+            hint={(data?.winners ?? []).slice(0, 3).map((w) => `${name(w.address)} ${usd(w.us_usd, true)}`).join(", ") || " "} />
+        ) : best_ ? (
+          <Stat label="Copying today" value={data?.picks_today?.length ? data.picks_today.map(name).join(", ") : "nobody qualifies"}
+            hint={`${data?.open ?? 0} open copies, ${usd(data?.open_usd, true)} now`} />
+        ) : (
+          <Stat label="Still open" value={usd(data?.open_usd, true)} tone={data?.open_usd} hint={`${data?.open ?? 0} copies`} />
+        )}
+      </div>
     </>
   );
 }
