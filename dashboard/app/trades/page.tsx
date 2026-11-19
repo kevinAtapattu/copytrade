@@ -59,7 +59,7 @@ export default function TradesPage() {
             { key: "w", label: "Wallet", render: (t) => who(t.trader) },
             { key: "side", label: "Side", render: (t) => <span className={t.side === "buy" ? "pos" : "neg"}>{t.side}</span> },
             { key: "mint", label: "Token", render: (t) => <span className="mono">{short(t.mint)}</span> },
-            { key: "sol", label: "SOL", num: true, render: (t) => num(t.sol_amount, 3) },
+            { key: "sol", label: "SOL", num: true, render: (t) => t.pool === "nonsol" ? <span className="muted" title="Paid in another coin, not SOL">-</span> : num(t.sol_amount, 3) },
             { key: "tok", label: "Tokens", num: true, render: (t) => num(t.token_amount, 0) },
             { key: "px", label: "Price after", help: "Token price in SOL right after their trade.", num: true, render: (t) => <span className="mono">{price(t.v_sol / t.v_tokens)}</span> },
             { key: "pool", label: "Copyable", help: help("nonsol"), render: (t) => t.pool === "nonsol" ? <span className="muted">no, other coin</span> : "yes" },

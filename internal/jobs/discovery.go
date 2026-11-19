@@ -140,6 +140,14 @@ func Discover(ctx context.Context, st store.Store, b bus.Bus, c config.Config, n
 			continue
 		}
 		res.TokensScanned++
+		// Trades on other-coin pools ("nonsol") record a quote-token amount, not SOL.
+		priced := trades[:0:0]
+		for _, t := range trades {
+			if model.Priced(t.Pool) {
+				priced = append(priced, t)
+			}
+		}
+		trades = priced
 		// "Early" is judged against the earliest price we have: launch for chain
 		// history, our first observation for stored stream data.
 		eff := tok

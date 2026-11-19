@@ -92,7 +92,7 @@ export default function WalletDetail() {
           { key: "at", label: "Time", render: (t) => time(t.received_at) },
           { key: "side", label: "Side", render: (t) => <span className={t.side === "buy" ? "pos" : "neg"}>{t.side}</span> },
           { key: "mint", label: "Token", render: (t) => <a className="mono" href={`https://pump.fun/coin/${t.mint}`} target="_blank" rel="noreferrer">{short(t.mint)}</a> },
-          { key: "sol", label: "Their SOL", num: true, render: (t) => num(t.sol_amount, 3) },
+          { key: "sol", label: "Their SOL", num: true, render: (t) => t.pool === "nonsol" ? <span className="muted" title="Paid in another coin, not SOL">-</span> : num(t.sol_amount, 3) },
           { key: "px", label: "Their price", num: true, render: (t) => <span className="mono">{price(t.price)}</span> },
           ...DELAYS.map((d) => ({
             key: `s${d}`, label: `+${d}s fill`, num: true,

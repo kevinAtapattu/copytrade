@@ -15,14 +15,15 @@ import (
 // trader data on these coins, so this is the wallet's own fill-to-fill result,
 // not a delayed copy. Read-only, and kept out of every other total.
 //
-// sol_amount on these trades is an amount of the quote token, not SOL, and its
-// scale is unknown. So each round is a percentage in that coin's own quote
-// units, and money is "$ per $10 copy" (pct * 10). Raw amounts are never added
-// across coins.
+// sol_amount on these trades is an amount of the coin's quote token, not SOL:
+// raw quote units / 1e9 on both the bonding curve (TradeEvent quote fields) and
+// PumpSwap (pumpswap.Event.Quote), whatever the token's decimals. So each round
+// is a percentage in that coin's own quote units, and money is "$ per $10 copy"
+// (pct * 10). Raw amounts are never added across coins.
 //
-// Bonding-curve trades on these coins carry no quote amount (the curve event
-// reports 0), so a coin with any unpriced trade can't be matched: all unpriced
-// is skipped as "no_price", a mix of priced and unpriced is flagged "mixed".
+// Curve trades recorded before the quote fields were decoded carry 0 until
+// cmd/backfillquote fills them in. A coin with any unpriced trade can't be
+// matched: all unpriced is skipped as "no_price", a mix is flagged "mixed".
 
 const (
 	otherDust = 0.01 // a round closes when holdings drop under 1% of their peak
@@ -75,6 +76,12 @@ func median(xs []float64) float64 {
 	return s[len(s)/2]
 }
 
+// mixedScale: curve and AMM median prices further apart than this are taken as
+// different units. Both paths use raw/1e9, so a real mismatch means a different
+// quote token (or decimals, ~1000x). Prices really move 3-5x around graduation
+// (D4dpAs: 4.3x within 4 minutes), so the bar sits well above that.
+const mixedScale = 10
+
 // checkUnits says whether a coin's trades can be matched in one unit.
 func checkUnits(ts []model.Trade) (reason, note string) {
 	priced := 0
@@ -93,7 +100,7 @@ func checkUnits(ts []model.Trade) (reason, note string) {
 	case len(px[true]) > 0 && len(px[false]) > 0:
 		// Both parse paths priced: their prices should be in the same ballpark.
 		r := median(px[true]) / median(px[false])
-		if r > 3 || r < 1.0/3 {
+		if r > mixedScale || r < 1.0/mixedScale {
 			return "mixed", "curve and AMM prices differ in scale"
 		}
 	}

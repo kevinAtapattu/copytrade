@@ -717,6 +717,12 @@ func TradesFromLogs(sig, wallet string, logs []string, at time.Time) (trades []m
 	return tradesFromEvents(sig, wallet, evs, at), truncated
 }
 
+// CurveTradesFromTx decodes the wallet's bonding-curve trades from a fetched tx,
+// exactly as the stream does (no balances). Used by cmd/backfillquote.
+func CurveTradesFromTx(sig, wallet string, tx solana.TxEvents, at time.Time) []model.Trade {
+	return tradesFromEvents(sig, wallet, history.EventsFromTx(tx), at)
+}
+
 func tradesFromEvents(sig, wallet string, evs []history.Event, at time.Time) []model.Trade {
 	var mine []history.Event
 	for _, e := range evs {
@@ -738,6 +744,12 @@ func tradesFromEvents(sig, wallet string, evs []history.Event, at time.Time) []m
 		if e.VSol <= 0 || e.VTokens <= 0 {
 			// Curves quoted in another token report no SOL reserves; our SOL math can't price them.
 			t.Pool = "nonsol"
+			if e.QuoteMint != "" {
+				// The event's quote amount instead: raw quote-token units / 1e9, the
+				// same scale ammTrades records from pumpswap.Event.Quote. Not SOL;
+				// every SOL consumer skips pool "nonsol". VSol/VTokens stay 0.
+				t.SolAmount = e.QuoteAmount
+			}
 		} else {
 			t.MarketCapSol = e.VSol / e.VTokens * 1e9
 		}

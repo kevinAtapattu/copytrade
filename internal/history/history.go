@@ -36,9 +36,27 @@ type Event struct {
 	Timestamp   int64
 	VSol        float64
 	VTokens     float64
+	// Quote fields, from the extended event (2026). On curves priced in another
+	// token (pool "nonsol") SolAmount and VSol are 0 and the trade's size is here.
+	// QuoteAmount and VQuote are raw quote-token units / 1e9, whatever the quote
+	// token's real decimals: the same scale as pumpswap.Event.Quote, so a coin's
+	// curve and PumpSwap trades compare. On SOL curves they equal SolAmount/VSol
+	// and QuoteMint is "". Zero when the event is too short to carry them.
+	QuoteMint   string
+	QuoteAmount float64
+	VQuote      float64
 }
 
 const eventLen = 32 + 8 + 8 + 1 + 32 + 8 + 8 + 8 // fields we read; newer versions append more
+
+// Extended layout after virtual_token_reserves (observed on mainnet, November 2026):
+// real reserves, fee recipient, fees, creator, creator fees, volume tracking, then
+// ix_name (u32 length + bytes) at 250. After the name: 37 bytes we don't use, the
+// quote mint (32), quote_amount, virtual_quote_reserves, real_quote_reserves (u64).
+const (
+	ixNameAt     = 250
+	quoteMintOff = 37 // from the end of ix_name
+)
 
 // DecodeEvent decodes a TradeEvent body that starts right after the 8-byte discriminator.
 func DecodeEvent(b []byte) (Event, error) {
@@ -46,7 +64,7 @@ func DecodeEvent(b []byte) (Event, error) {
 		return Event{}, errors.New("trade event too short")
 	}
 	u := func(o int) uint64 { return binary.LittleEndian.Uint64(b[o:]) }
-	return Event{
+	e := Event{
 		Mint:        base58.Encode(b[0:32]),
 		SolAmount:   float64(u(32)) / 1e9,
 		TokenAmount: float64(u(40)) / 1e6,
@@ -55,7 +73,22 @@ func DecodeEvent(b []byte) (Event, error) {
 		Timestamp:   int64(u(81)),
 		VSol:        float64(u(89)) / 1e9,
 		VTokens:     float64(u(97)) / 1e6,
-	}, nil
+	}
+	if len(b) >= ixNameAt+4 {
+		n := int(binary.LittleEndian.Uint32(b[ixNameAt:]))
+		q := ixNameAt + 4 + n + quoteMintOff
+		if n <= 64 && len(b) >= q+32+3*8 {
+			e.QuoteAmount = float64(u(q+32)) / 1e9
+			e.VQuote = float64(u(q+40)) / 1e9
+			for _, c := range b[q : q+32] {
+				if c != 0 {
+					e.QuoteMint = base58.Encode(b[q : q+32])
+					break
+				}
+			}
+		}
+	}
+	return e, nil
 }
 
 // EncodeEvent is the inverse of DecodeEvent including the discriminator (tests, fixtures).

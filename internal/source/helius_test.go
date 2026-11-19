@@ -384,3 +384,60 @@ func TestSellBalanceCountsAllAccounts(t *testing.T) {
 		t.Fatalf("balance after %v, want 0: a stale read of the sold account must not count", got)
 	}
 }
+
+// nad's real trades on curves priced in another token (captured November 2026):
+// the TradeEvent's sol_amount and SOL reserves are 0 and the size is in the
+// extended quote fields. The trade stays pool "nonsol" (never
+// copied or simulated), VSol stays 0, and SolAmount carries the quote amount in raw units / 1e9,
+// the scale PumpSwap trades use. A SOL curve trade is unchanged.
+func TestNonSOLCurveTradesRecordQuoteAmount(t *testing.T) {
+	raw, err := os.ReadFile("testdata/nonsol.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx map[string]struct {
+		Signature string   `json:"signature"`
+		BlockTime int64    `json:"block_time"`
+		Logs      []string `json:"logs"`
+	}
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		t.Fatal(err)
+	}
+	const nad = "363sqMFaxZgvCoGzxKjXe1BqMGYkSVoCwmghZUndXuaT"
+	for _, c := range []struct {
+		name, side string
+		tokens     float64
+		quoteRaw   uint64
+	}{
+		{"sell", model.SideSell, 9048876.509232, 62853244},
+		{"buy_exact_quote_in", model.SideBuy, 1808512.492443, 158346},
+		{"multi_hop_swap", model.SideSell, 20629191.436820, 2226220788527},
+	} {
+		tx := fx[c.name]
+		got, _ := TradesFromLogs(tx.Signature, nad, tx.Logs, time.Unix(tx.BlockTime, 0))
+		if len(got) != 1 {
+			t.Fatalf("%s: trades %+v", c.name, got)
+		}
+		tr := got[0]
+		if tr.Pool != "nonsol" || tr.VSol != 0 || tr.MarketCapSol != 0 || tr.Side != c.side ||
+			model.Priced(tr.Pool) || tr.TokenAmount < c.tokens-1e-6 || tr.TokenAmount > c.tokens+1e-6 {
+			t.Fatalf("%s: trade %+v", c.name, tr)
+		}
+		if want := float64(c.quoteRaw) / 1e9; tr.SolAmount != want {
+			t.Fatalf("%s: quote amount %v, want %v", c.name, tr.SolAmount, want)
+		}
+	}
+	evs := history.EventsFromTx(solana.TxEvents{Logs: fx["sell"].Logs})
+	if len(evs) != 1 || evs[0].QuoteMint == "" || evs[0].SolAmount != 0 || evs[0].VQuote != 4.917197284 {
+		t.Fatalf("event %+v", evs)
+	}
+
+	sol := fx["sol_buy"]
+	got, _ := TradesFromLogs(sol.Signature, nad, sol.Logs, time.Unix(sol.BlockTime, 0))
+	if len(got) != 1 || got[0].Pool != "pump" || got[0].SolAmount != 1.466666666 || got[0].VSol != 102.483779137 {
+		t.Fatalf("SOL curve trade changed: %+v", got)
+	}
+	if evs := history.EventsFromTx(solana.TxEvents{Logs: sol.Logs}); len(evs) != 1 || evs[0].QuoteMint != "" || evs[0].QuoteAmount != evs[0].SolAmount {
+		t.Fatalf("SOL event %+v", evs)
+	}
+}

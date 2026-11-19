@@ -100,7 +100,7 @@ export default function OtherCoinsPage() {
           <div className="card" style={{ marginTop: 14 }}>
             <h3>Not counted ({data.skipped.length})</h3>
             <div className="sub" style={{ marginBottom: 8 }}>
-              Bonding curve trades on these coins record no price, so a coin with any of them can&apos;t be worked out.
+              Sells with no recorded buy, tokens held from before we tracked the wallet, or a coin whose prices can&apos;t be put in one unit.
             </div>
             <Table rows={data.skipped} rowKey={(x) => `${x.wallet}${x.mint}${x.reason}`} empty="Nothing left out."
               cols={[

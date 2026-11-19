@@ -160,3 +160,13 @@ func TestEventsOnlyFromPumpProgram(t *testing.T) {
 		t.Fatalf("want only the pump event, got %+v", evs)
 	}
 }
+
+// Short (pre-2026) events carry no quote fields; they decode as before.
+func TestShortEventHasNoQuote(t *testing.T) {
+	e := Event{Mint: "So11111111111111111111111111111111111111112", SolAmount: 1, TokenAmount: 5, IsBuy: true,
+		User: "So11111111111111111111111111111111111111112", Timestamp: 1, VSol: 30, VTokens: 1e9}
+	got, err := DecodeEvent(EncodeEvent(e)[8:])
+	if err != nil || got != e || got.QuoteMint != "" || got.QuoteAmount != 0 {
+		t.Fatalf("got %+v err %v", got, err)
+	}
+}

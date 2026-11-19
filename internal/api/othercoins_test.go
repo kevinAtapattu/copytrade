@@ -44,6 +44,12 @@ func TestOtherCoins(t *testing.T) {
 	add("E", "sell", 0, 100, 0, 0, 2*time.Minute)
 	add("F", "buy", 0, 100, 100, 0, time.Minute)
 	add("F", "sell", 5, 100, 0, 20, 2*time.Minute)
+	// G: curve buy, AMM sell after graduation at 4x the price: same units, counted (+300%).
+	// H: AMM prices 1000x the curve's: a different scale, flagged mixed.
+	add("G", "buy", 1, 100, 100, 0, time.Minute)
+	add("G", "sell", 4, 100, 0, 20, 2*time.Minute)
+	add("H", "buy", 1, 100, 100, 0, time.Minute)
+	add("H", "sell", 1000, 100, 0, 20, 2*time.Minute)
 	// A SOL coin never shows up here.
 	st.InsertTargetTrade(ctx, model.Trade{Signature: "sol", Trader: "NAD", Mint: "S", Side: "buy", SolAmount: 1, TokenAmount: 1, Pool: "pump", ReceivedAt: t0})
 
@@ -65,30 +71,30 @@ func TestOtherCoins(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err, w.Body.String())
 	}
-	if got.Summary.Rounds != 2 || got.Summary.Won != 1 || got.Summary.Open != 1 {
+	if got.Summary.Rounds != 3 || got.Summary.Won != 2 || got.Summary.Open != 1 {
 		t.Fatalf("summary %+v", got.Summary)
 	}
 	pct := map[string]float64{}
 	for _, r := range got.Rounds {
 		pct[r.Mint] = r.Pct
 	}
-	if math.Abs(pct["A"]+21.74) > 0.01 || pct["B"] != 50 {
+	if math.Abs(pct["A"]+21.74) > 0.01 || pct["B"] != 50 || pct["G"] != 300 {
 		t.Fatalf("rounds %+v", got.Rounds)
 	}
-	if got.Summary.Total != 2.83 || got.Summary.WithoutBst != -2.17 {
+	if got.Summary.Total != 32.83 || got.Summary.WithoutBst != 2.83 {
 		t.Fatalf("totals %+v", got.Summary)
 	}
 	reasons := map[string]string{}
 	for _, x := range got.Skipped {
 		reasons[x.Mint] = x.Reason
 	}
-	want := map[string]string{"C": "before_tracking", "D": "sell_only", "E": "no_price", "F": "mixed"}
+	want := map[string]string{"C": "before_tracking", "D": "sell_only", "E": "no_price", "F": "mixed", "H": "mixed"}
 	for m, r := range want {
 		if reasons[m] != r {
 			t.Fatalf("skipped %+v", got.Skipped)
 		}
 	}
-	if len(got.Skipped) != 4 || len(got.Days) != 1 || got.Days[0].Rounds != 2 {
+	if len(got.Skipped) != 5 || len(got.Days) != 1 || got.Days[0].Rounds != 3 {
 		t.Fatalf("skipped %+v days %+v", got.Skipped, got.Days)
 	}
 }
