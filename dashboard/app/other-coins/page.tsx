@@ -91,7 +91,7 @@ export default function OtherCoinsPage() {
                 { key: "mint", label: "Coin", render: (r) => coin(r.mint) },
                 { key: "hold", label: "Held", num: true, hideSm: true, sort: (r) => r.hold_s, render: (r) => dur(r.hold_s) },
                 { key: "trades", label: "Buys / sells", num: true, hideSm: true, render: (r) => `${r.buys} / ${r.sells}` },
-                { key: "pct", label: "Result", num: true, sort: (r) => r.pct,
+                { key: "pct", label: "Result", num: true, hideSm: true, sort: (r) => r.pct,
                   render: (r) => <span className={pnlClass(r.pct)}>{r.pct > 0 ? "+" : ""}{r.pct.toFixed(1)}%</span> },
                 { key: "per10", label: "Per $10", num: true, sort: (r) => r.per10,
                   render: (r) => <span className={pnlClass(r.per10)}>{usd(r.per10, true)}</span> },
