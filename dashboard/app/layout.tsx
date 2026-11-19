@@ -9,7 +9,9 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "copytrade", statusBarStyle: "black" },
 };
 
-export const viewport: Viewport = { themeColor: "#000000" };
+// cover: the page runs under the iPhone's rounded corners and home bar; the tab bar
+// pads itself with the safe-area insets.
+export const viewport: Viewport = { themeColor: "#000000", viewportFit: "cover" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
