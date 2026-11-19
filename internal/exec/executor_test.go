@@ -775,3 +775,71 @@ func TestSellAfterMigrationTargetsPumpSwap(t *testing.T) {
 		t.Fatalf("PumpPortal pool %q", r.Pool)
 	}
 }
+
+// flaky fails its first n sells, then trades on paper.
+type flaky struct {
+	Paper
+	mu    sync.Mutex
+	fails int
+	sells int
+}
+
+func (f *flaky) Execute(ctx context.Context, o Order) (Result, error) {
+	if o.Side == model.SideSell {
+		f.mu.Lock()
+		f.sells++
+		fail := f.sells <= f.fails
+		f.mu.Unlock()
+		if fail {
+			return Result{Attempts: 3}, errors.New(`tx failed on-chain: {"InstructionError":[3,{"Custom":6005}]}`)
+		}
+	}
+	return f.Paper.Execute(ctx, o)
+}
+
+// A failed sell is tried again until it goes through; a sell that may have
+// landed is not, and retries stop after the window.
+func TestFailedSellIsRetried(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	fl := &flaky{Paper: ex.Trader.(Paper), fails: 2}
+	ex.Trader, ex.SellRetryEvery = fl, 20*time.Millisecond
+	ctx := context.Background()
+	ex.HandleTrade(ctx, trd("a", "LIVE", "M1", "buy", 40, 0, true, 1e6, 1e6))
+	ex.HandleTrade(ctx, trd("b", "LIVE", "M1", "sell", 40, time.Second, true, 1e6, 0))
+	deadline := time.Now().Add(2 * time.Second)
+	for ex.OpenCount() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if f := fills(st); ex.OpenCount() != 0 || f["sell:failed"] != 2 || f["sell:filled"] != 1 {
+		t.Fatalf("want 2 failed tries then a fill and the copy closed: %v (open %d)", f, ex.OpenCount())
+	}
+
+	// Landed but unreadable: never sold again.
+	ex2, st2 := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	ex2.SellRetryEvery = 20 * time.Millisecond
+	ex2.HandleTrade(ctx, trd("a", "LIVE", "M1", "buy", 40, 0, true, 1e6, 1e6))
+	ex2.Trader = errTrader{errors.New("confirmed but could not read fill: rpc down")}
+	ex2.HandleTrade(ctx, trd("b", "LIVE", "M1", "sell", 40, time.Second, true, 1e6, 0))
+	time.Sleep(150 * time.Millisecond)
+	if f := fills(st2); f["sell:failed"] != 1 {
+		t.Fatalf("a sell that may have landed was retried: %v", f)
+	}
+
+	// Always failing: stops after the window.
+	ex3, st3 := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5})
+	ex3.HandleTrade(ctx, trd("a", "LIVE", "M1", "buy", 40, 0, true, 1e6, 1e6))
+	ex3.Trader = &flaky{Paper: ex3.Trader.(Paper), fails: 1 << 30}
+	ex3.SellRetryEvery, ex3.SellRetryFor = 20*time.Millisecond, 100*time.Millisecond
+	ex3.HandleTrade(ctx, trd("b", "LIVE", "M1", "sell", 40, time.Second, true, 1e6, 0))
+	time.Sleep(400 * time.Millisecond)
+	n := fills(st3)["sell:failed"]
+	time.Sleep(200 * time.Millisecond)
+	if n2 := fills(st3)["sell:failed"]; n < 3 || n2 != n || n > 10 {
+		t.Fatalf("retries %d then %d: want a few, then none", n, n2)
+	}
+}
+
+type errTrader struct{ err error }
+
+func (e errTrader) Execute(context.Context, Order) (Result, error) { return Result{}, e.err }
+func (errTrader) Mode() string                                     { return "paper" }

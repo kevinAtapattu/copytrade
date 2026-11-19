@@ -38,6 +38,9 @@ type Executor struct {
 	// Sync runs orders inline (replay/tests). Otherwise each (wallet, mint) gets its
 	// own ordered worker so a slow live tx never blocks the stream.
 	Sync bool
+	// A sell that fails is tried again every SellRetryEvery (default 10s) until the
+	// copy is closed or SellRetryFor (default 5m) has passed since the first try.
+	SellRetryEvery, SellRetryFor time.Duration
 
 	mu        sync.Mutex
 	curves    map[string]curve.State
@@ -420,6 +423,7 @@ func (e *Executor) sell(ctx context.Context, p *model.LivePosition, pct float64,
 	if err != nil {
 		f.Status, f.Error = "failed", err.Error()
 		e.recordLocked(ctx, f, nil)
+		e.retrySellLocked(ctx, p, pct, reason, t, err)
 		return
 	}
 	at := res.FilledAt
@@ -440,6 +444,62 @@ func (e *Executor) sell(ctx context.Context, p *model.LivePosition, pct float64,
 	e.checkDayLocked(ctx, at)
 	snap := *p
 	e.recordLocked(ctx, f, &snap)
+}
+
+// retrySellLocked schedules another try of a failed sell, so a copy isn't left
+// holding a token the wallet already sold (Nov 18: a sell failed 3 times and sat
+// 22 minutes). Not when the tx may have landed: selling again could sell twice.
+// Each retry is a fresh order on the position's worker, after the previous order
+// failed or expired. Caller holds e.mu.
+func (e *Executor) retrySellLocked(ctx context.Context, p *model.LivePosition, pct float64, reason string, t model.Trade, err error) {
+	msg := err.Error()
+	if strings.Contains(msg, "confirmed but could not read fill") || strings.Contains(msg, "confirmation timed out") {
+		return
+	}
+	every, limit := e.SellRetryEvery, e.SellRetryFor
+	if every <= 0 {
+		every = 10 * time.Second
+	}
+	if limit <= 0 {
+		limit = 5 * time.Minute
+	}
+	first := time.Now() // wall clock: the window is real time even in replays
+	if orig, ok := retryStart(t.Signature); ok {
+		first = orig
+	}
+	if time.Since(first) > limit {
+		slog.Warn("giving up on retrying a failed sell", "mint", p.Mint, "since", first)
+		return
+	}
+	id, k := p.ID, pkey(p.Wallet, p.Mint)
+	time.AfterFunc(every, func() {
+		e.mu.Lock()
+		pos := e.positions[k]
+		if pos == nil || pos.ID != id || e.stopping[k] {
+			e.mu.Unlock()
+			return // closed or another full sell is running
+		}
+		if pct >= 99.9 {
+			e.stopping[k] = true
+		}
+		e.mu.Unlock()
+		now := time.Now()
+		rt := t
+		rt.Signature = fmt.Sprintf("retry:%d:%d:%s", first.UnixNano(), now.UnixNano(), id)
+		rt.ReceivedAt = now
+		slog.Info("retrying failed sell", "mint", pos.Mint, "reason", reason)
+		e.run(k, func() { e.sell(ctx, pos, pct, reason, rt) })
+	})
+}
+
+// retryStart reads when the first try of a retried sell happened.
+func retryStart(sig string) (time.Time, bool) {
+	var first, now int64
+	var id string
+	if n, _ := fmt.Sscanf(strings.ReplaceAll(sig, ":", " "), "retry %d %d %s", &first, &now, &id); n < 2 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, first), true
 }
 
 // ManualSell sells pct of an open position now, at the market, when you ask from
