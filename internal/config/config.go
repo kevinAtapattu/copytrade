@@ -58,6 +58,7 @@ type Config struct {
 	PromoteMinDays   float64
 	PromoteMinTrades int
 	DropInactiveDays float64
+	KeepWallets      []string // KEEP_WALLETS: comma-separated bench wallets never pruned
 	DropBadPnlUSD    float64
 	DropBadMinTrades int
 
@@ -155,6 +156,7 @@ func Load() Config {
 		DropInactiveDays: flt("DROP_INACTIVE_DAYS", 7),
 		DropBadPnlUSD:    flt("DROP_BAD_PNL_USD", -50),
 		DropBadMinTrades: integer("DROP_BAD_MIN_TRADES", 15),
+		KeepWallets:      list("KEEP_WALLETS"),
 
 		DiscoveryInterval:       dur("DISCOVERY_INTERVAL", 10*time.Minute),
 		DiscoveryMult:           flt("DISCOVERY_MULT", 5),
@@ -225,6 +227,16 @@ func str(k, def string) string {
 		return strings.TrimSpace(v)
 	}
 	return def
+}
+
+func list(k string) []string {
+	var out []string
+	for _, v := range strings.Split(str(k, ""), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func flt(k string, def float64) float64 {

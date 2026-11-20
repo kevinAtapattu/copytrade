@@ -142,6 +142,19 @@ func TestPrune(t *testing.T) {
 	}
 }
 
+// A kept wallet stays on the bench however idle or low-scoring it is.
+func TestPruneSkipsKept(t *testing.T) {
+	r := rules
+	r.Keep = map[string]bool{"KEEP": true}
+	w := wallet("KEEP", model.StatusBench)
+	old := now.AddDate(0, 0, -30)
+	w.LastTradeAt = &old
+	ss := []model.Score{{Wallet: "KEEP", DelayS: 2, WindowDays: 30, Positions: 20, PnlUSD: -60}}
+	if ch := r.Prune([]model.Wallet{w}, Index(ss), now); len(ch) != 0 {
+		t.Fatalf("kept wallet pruned: %+v", ch)
+	}
+}
+
 func TestPruneBenchCap(t *testing.T) {
 	var ws []model.Wallet
 	var ss []model.Score

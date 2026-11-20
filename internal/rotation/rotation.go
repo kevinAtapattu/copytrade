@@ -29,6 +29,8 @@ type Rules struct {
 	// Cooldown stops a demoted wallet being promoted again this soon (Swan's score
 	// hovered at 0 and it flipped live/bench 9 times in a day).
 	Cooldown time.Duration
+	// Keep holds wallets on the bench for watching: Prune never drops them.
+	Keep map[string]bool
 }
 
 // Change is one decided status change.
@@ -149,7 +151,7 @@ func (r Rules) Prune(wallets []model.Wallet, ix ScoreIndex, now time.Time) []Cha
 	}
 	var bench []kept
 	for _, w := range wallets {
-		if w.Status != model.StatusBench {
+		if w.Status != model.StatusBench || r.Keep[w.Address] {
 			continue
 		}
 		last := w.AddedAt
@@ -200,10 +202,15 @@ func Apply(ctx context.Context, st store.Store, cs []Change, now time.Time) ([]C
 
 // FromConfig builds rules from config.
 func FromConfig(c config.Config) Rules {
+	keep := map[string]bool{}
+	for _, a := range c.KeepWallets {
+		keep[a] = true
+	}
 	return Rules{
 		DelayS: c.RotationDelayS, LiveMax: c.LiveMax, BenchMax: c.BenchMax, MaxDrawdown: c.MaxDrawdown,
 		PromoteMinDays: c.PromoteMinDays, PromoteMinTrades: c.PromoteMinTrades,
 		DropInactiveDays: c.DropInactiveDays, DropBadPnlUSD: c.DropBadPnlUSD, DropBadMinTrades: c.DropBadMinTrades,
 		ManualHold: 24 * time.Hour, Cooldown: 24 * time.Hour,
+		Keep: keep,
 	}
 }

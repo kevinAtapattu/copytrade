@@ -332,3 +332,6 @@ Today's result is realized P&L plus open copies marked at the latest price (proc
 - `cmd/backfillquote` re-reads nad's stored nonsol curve trades still at 0 and fills them in (88 target_trades rows, 88 token_trades rows). It only touches rows at 0, so it can be run again after ingest restarts to catch trades recorded in between.
 - Other coins: the "mixed units" bar between curve and AMM median prices went from 3x to 10x. Units now agree by construction, and D4dpAs moved 4.3x across graduation in 4 minutes. A real unit mismatch would be ~1000x.
 - New numbers (Nov 19): 75 rounds on 67 coins, 39% won, +$64.69 per $10 total, +$19.19 without the best round (+$45.50). 6 coins not counted, all sells with no recorded buy. Earlier -$20.50 was only the 35 rounds that had AMM prices.
+
+## Watching a wallet without copying it (Nov 20)
+Kevin wanted to watch Zyaf's volume without copying it live. Bench wallets are paper-tracked already, but rotation drops them after 7 idle days, on a bad 30-day result, or when the bench is over its cap, and Zyaf had a 7-day gap (Nov 11 to 18). KEEP_WALLETS lists bench wallets that Prune skips. It never makes a wallet live: that stays manual (LIVE_MAX=0 turns off auto-promotion).
