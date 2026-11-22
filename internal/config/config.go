@@ -93,6 +93,7 @@ type Config struct {
 	JitoURL               string
 	MaxOpenPositions      int
 	StopLossPct           float64
+	MinTargetBuySol       float64 // MIN_TARGET_BUY_SOL: don't copy buys smaller than this
 	DailyLossLimitUSD     float64
 	ExecMaxAttempts       int
 	ExecBuyMaxLag         time.Duration
@@ -184,6 +185,7 @@ func Load() Config {
 		JitoURL:               str("JITO_URL", "https://mainnet.block-engine.jito.wtf/api/v1/bundles"),
 		MaxOpenPositions:      integer("MAX_OPEN_POSITIONS", 5),
 		StopLossPct:           flt("STOP_LOSS_PCT", 40),
+		MinTargetBuySol:       flt("MIN_TARGET_BUY_SOL", 0.05),
 		DailyLossLimitUSD:     flt("DAILY_LOSS_LIMIT_USD", 75),
 		ExecMaxAttempts:       integer("EXEC_MAX_ATTEMPTS", 3),
 		ExecBuyMaxLag:         dur("EXEC_BUY_MAX_LAG", 10*time.Second),

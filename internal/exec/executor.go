@@ -22,6 +22,9 @@ type Risk struct {
 	MaxOpenPositions int
 	StopLossPct      float64
 	DailyLossUSD     float64
+	// MinTargetSol skips buys where they spent less than this (0.01 SOL pings
+	// lost on paper; their profit is in the 0.5 SOL+ buys). 0 = copy all.
+	MinTargetSol float64
 	// BuyMaxLag: a buy that can't land within this long after their trade is
 	// cancelled, since we'd be buying at a price that no longer matches theirs. 0 = no limit.
 	BuyMaxLag time.Duration
@@ -279,6 +282,8 @@ func (e *Executor) buyBlockLocked(k string, t model.Trade) string {
 		return "kill switch on"
 	case e.migrated[t.Mint]:
 		return "not on a SOL bonding curve (migrated or non-SOL quote)"
+	case e.Risk.MinTargetSol > 0 && t.SolAmount < e.Risk.MinTargetSol:
+		return fmt.Sprintf("their buy was only %.3f SOL (we copy %.2f SOL+)", t.SolAmount, e.Risk.MinTargetSol)
 	case e.Risk.MaxOpenPositions > 0 && len(e.positions)+len(e.inflight) >= e.Risk.MaxOpenPositions:
 		return fmt.Sprintf("max open positions (%d)", e.Risk.MaxOpenPositions)
 	case e.dayStopped:

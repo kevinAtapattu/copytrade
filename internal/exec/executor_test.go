@@ -108,6 +108,20 @@ func TestMaxOpenPositions(t *testing.T) {
 	}
 }
 
+func TestSkipsTinyTargetBuys(t *testing.T) {
+	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5, MinTargetSol: 0.05})
+	ctx := context.Background()
+	ping := trd("p", "LIVE", "M1", "buy", 31, 0, true, 1e6, 1e6)
+	ping.SolAmount = 0.01
+	real := trd("r", "LIVE", "M2", "buy", 31, time.Second, true, 1e6, 1e6)
+	real.SolAmount = 0.098
+	ex.HandleTrade(ctx, ping)
+	ex.HandleTrade(ctx, real)
+	if f := fills(st); f["buy:rejected"] != 1 || f["buy:filled"] != 1 {
+		t.Fatalf("fills %v", f)
+	}
+}
+
 func TestStopLoss(t *testing.T) {
 	ex, st := setup(t, Risk{SizeUSD: 25, MaxOpenPositions: 5, StopLossPct: 40})
 	ctx := context.Background()

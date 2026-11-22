@@ -335,3 +335,6 @@ Today's result is realized P&L plus open copies marked at the latest price (proc
 
 ## Watching a wallet without copying it (Nov 20)
 Kevin wanted to watch Zyaf's volume without copying it live. Bench wallets are paper-tracked already, but rotation drops them after 7 idle days, on a bad 30-day result, or when the bench is over its cap, and Zyaf had a 7-day gap (Nov 11 to 18). KEEP_WALLETS lists bench wallets that Prune skips. It never makes a wallet live: that stays manual (LIVE_MAX=0 turns off auto-promotion).
+
+## Skip nad's tiny buys (Nov 22)
+nad sometimes buys 0.01 SOL (pings or tests) and we copied each at the full $10: GXnTGD lost $0.75 that way. On paper, nad's buys under 0.05 SOL lost 3 of 3; the profit is in the 0.5 SOL+ buys. MIN_TARGET_BUY_SOL (default 0.05) makes the live trader skip smaller buys. Kevin asked for 0.1, but nad's 0.098 SOL re-buy on A3skRG made +$2.72, so 0.05 keeps those and still skips the 0.01 pings. Paper copies are unchanged so the comparison stays like for like.
