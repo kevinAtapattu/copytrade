@@ -338,3 +338,6 @@ Kevin wanted to watch Zyaf's volume without copying it live. Bench wallets are p
 
 ## Skip nad's tiny buys (Nov 22)
 nad sometimes buys 0.01 SOL (pings or tests) and we copied each at the full $10: GXnTGD lost $0.75 that way. On paper, nad's buys under 0.05 SOL lost 3 of 3; the profit is in the 0.5 SOL+ buys. MIN_TARGET_BUY_SOL (default 0.05) makes the live trader skip smaller buys. Kevin asked for 0.1, but nad's 0.098 SOL re-buy on A3skRG made +$2.72, so 0.05 keeps those and still skips the 0.01 pings. Paper copies are unchanged so the comparison stays like for like.
+
+## SOL price at startup (Nov 22)
+nad bought 0.5s after an executor restart, before the first CoinGecko fetch, so the buy was sized at the $150 fallback: 0.0667 SOL (about $4.70) instead of $10. price.New now fetches once (3 tries) before returning, and the .env fallback is set near the real price (70). The open position's sol_usd was corrected to 69.95 by hand.

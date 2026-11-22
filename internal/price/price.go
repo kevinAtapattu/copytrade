@@ -78,6 +78,20 @@ func New(ctx context.Context, fixed, fallback float64) Source {
 		return Fixed(fixed)
 	}
 	l := NewLive(fallback)
+	// Fetch once before returning: a service that starts and trades straight away
+	// must not size by the fallback ($150 vs a real $70 sized a buy at half).
+	for i := 0; i < 3; i++ {
+		if v, err := l.fetch(ctx); err == nil && v > 0 {
+			l.set(v)
+			break
+		} else if err != nil {
+			slog.Warn("sol price: first fetch failed, using fallback until it works", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
 	go l.Run(ctx, time.Minute)
 	return l
 }
