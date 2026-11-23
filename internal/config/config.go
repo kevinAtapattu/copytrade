@@ -59,6 +59,9 @@ type Config struct {
 	PromoteMinTrades int
 	DropInactiveDays float64
 	KeepWallets      []string // KEEP_WALLETS: comma-separated bench wallets never pruned
+	// NonsolWallets (NONSOL_WALLETS) are paper-copied on other coins by nonsolsim
+	// whatever their status, on top of the live wallets and KEEP_WALLETS. Default nad.
+	NonsolWallets    []string
 	DropBadPnlUSD    float64
 	DropBadMinTrades int
 
@@ -158,6 +161,7 @@ func Load() Config {
 		DropBadPnlUSD:    flt("DROP_BAD_PNL_USD", -50),
 		DropBadMinTrades: integer("DROP_BAD_MIN_TRADES", 15),
 		KeepWallets:      list("KEEP_WALLETS"),
+		NonsolWallets:    listDef("NONSOL_WALLETS", "363sqMFaxZgvCoGzxKjXe1BqMGYkSVoCwmghZUndXuaT"),
 
 		DiscoveryInterval:       dur("DISCOVERY_INTERVAL", 10*time.Minute),
 		DiscoveryMult:           flt("DISCOVERY_MULT", 5),
@@ -239,6 +243,14 @@ func list(k string) []string {
 		}
 	}
 	return out
+}
+
+// listDef is list(k), or def (comma-separated) when k is unset or empty.
+func listDef(k, def string) []string {
+	if out := list(k); len(out) > 0 {
+		return out
+	}
+	return strings.Split(def, ",")
 }
 
 func flt(k string, def float64) float64 {

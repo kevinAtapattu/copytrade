@@ -78,6 +78,11 @@ services:
     <<: *go
     command: ["/app/alerter"]
 
+  # Paper copies on non-SOL coins via Jupiter quotes. Own consumer group, own table.
+  nonsolsim:
+    <<: *go
+    command: ["/app/nonsolsim"]
+
   api:
     <<: *go
     command: ["/app/api"]

@@ -17,6 +17,7 @@ func main() {
 	a := app.Start("api")
 	defer a.Close()
 	srv := api.New(a.Store, a.Bus, a.Redis, a.Cfg)
+	srv.NonsolCopies = a.PG.ListNonsolCopies
 	// The overview's real-money view shows the trading wallet's balance. Only the
 	// public address is kept; the secret key is dropped here.
 	if kp, err := solana.ParseKeypair(a.Cfg.TraderPrivateKey); err == nil && a.Cfg.TraderPrivateKey != "" {

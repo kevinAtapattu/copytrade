@@ -42,7 +42,9 @@ type Server struct {
 	Wallet func(ctx context.Context) (addr string, sol float64, err error)
 	// SolUSD, if set, is the current SOL price.
 	SolUSD func() float64
-	hub    *hub
+	// NonsolCopies, if set, lists our paper copies on other coins (newest first).
+	NonsolCopies func(ctx context.Context, limit int) ([]model.NonsolCopy, error)
+	hub          *hub
 
 	walletMu  sync.Mutex
 	walletAt  time.Time
@@ -66,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/overview", s.overview)
 	m.HandleFunc("GET /api/calendar", s.calendar)
 	m.HandleFunc("GET /api/other-coins", s.otherCoins)
+	m.HandleFunc("GET /api/other-coins/copies", s.nonsolCopies)
 	m.HandleFunc("GET /api/wallets", s.wallets)
 	m.HandleFunc("POST /api/wallets", s.addWallet)
 	m.HandleFunc("GET /api/wallets/{addr}", s.walletDetail)

@@ -98,7 +98,7 @@ make down
 
 Other targets: `make test`, `make migrate` (migrate + seed wallets.txt against `DATABASE_URL`), `make replay`, `make replay-db` (replay into Postgres so the dashboard shows it; **wipes the DB**), `make fixtures`, `make dev-deps` (only Postgres + Redis in Docker, run Go services with `go run ./cmd/<name>`), `make dashboard-dev`.
 
-Services: `migrate` (one-shot), `ingest`, `simulator`, `scorer`, `discovery`, `executor`, `alerter`, `api` (:8080), `dashboard` (:3000), `postgres` (:5432), `redis` (:6379). All ports bind to 127.0.0.1.
+Services: `migrate` (one-shot), `ingest`, `simulator`, `scorer`, `discovery`, `executor`, `alerter`, `nonsolsim` (paper copies on non-SOL coins, Jupiter quotes), `api` (:8080), `dashboard` (:3000), `postgres` (:5432), `redis` (:6379). All ports bind to 127.0.0.1.
 
 To add or remove wallets later, use the dashboard (Wallets page) or edit `wallets.txt` and run `docker compose run --rm migrate`. Seeding only adds wallets; it never changes the status of existing ones.
 

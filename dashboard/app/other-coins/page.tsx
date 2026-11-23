@@ -18,6 +18,26 @@ type Resp = {
   days: Day[]; rounds: Round[]; open: Round[]; skipped: Skip[];
 };
 
+type Copy = {
+  id: string; wallet: string; mint: string; their_at: string; opened_at: string; closed_at?: string; status: string;
+  sol_usd: number; sol_in: number; fees_sol: number; sells: number; route: string; skip_reason?: string;
+  last_error?: string; marked_at?: string; pnl_usd: number; pct: number;
+};
+type CopySummary = {
+  wallet?: string; copies: number; won: number; win_rate?: number; total_usd: number; best_usd?: number;
+  without_best_usd?: number; open: number; open_usd: number; skipped: number; skipped_by_reason: Record<string, number>;
+};
+type CopiesResp = { wallets: string[]; summary: CopySummary; by_wallet: CopySummary[]; copies: Copy[] };
+
+const copySkips: Record<string, string> = {
+  TOKEN_NOT_TRADABLE: "Jupiter can't trade it",
+  NO_ROUTES_FOUND: "No route",
+  ZERO_OUT: "No route",
+  QUOTE_FAILED: "Quote failed",
+  NO_SOL_PRICE: "No SOL price",
+};
+const skipText = (r?: string) => (r ? copySkips[r] ?? r : "");
+
 const reasons: Record<string, string> = {
   no_price: "No price recorded",
   mixed: "Mixed units",
@@ -28,6 +48,67 @@ const reasons: Record<string, string> = {
 const coin = (m: string) => <a className="mono" href={`https://pump.fun/coin/${m}`} target="_blank" rel="noreferrer">{short(m)}</a>;
 const when = (iso?: string) => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "-";
 const fmtDay = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+
+function OurCopies({ names }: { names: Map<string, string> }) {
+  const { data, error } = useApi<CopiesResp>("other-coins/copies", 30000);
+  const s = data?.summary;
+  const who = (data?.wallets ?? []).map((a) => names.get(a) ?? short(a)).join(", ") || "the live wallet";
+  const skips = Object.entries(s?.skipped_by_reason ?? {}).sort((a, b) => b[1] - a[1])
+    .map(([r, n]) => `${n} ${skipText(r).toLowerCase()}`).join(", ");
+  const others = (data?.by_wallet ?? []).filter((w) => w.wallet && !data?.wallets.includes(w.wallet));
+  const result = (c: Copy) => {
+    if (c.status === "skipped") return <span className="sub" title={c.last_error}>{skipText(c.skip_reason)}</span>;
+    if (c.status === "open" && !c.marked_at) return <span className="sub">open</span>;
+    return <span className={pnlClass(c.pnl_usd)} title={`${c.pct > 0 ? "+" : ""}${c.pct.toFixed(1)}%`}>
+      {usd(c.pnl_usd, true)}{c.status === "open" ? " open" : ""}</span>;
+  };
+  return (
+    <>
+      <h3 style={{ margin: "4px 0 6px" }}>Our paper copies (Jupiter quotes, 3s after them, $10 each)</h3>
+      <div className="sub" style={{ marginBottom: 10 }}>
+        What we would get: 3 seconds after {who} buys, we ask Jupiter what $10 of SOL buys, and when they sell we ask what
+        the same share of our coins sells for. Pool fees are in the quote, and we take off 0.0005 SOL per swap. One copy per
+        coin until it is sold. No stop loss. Paper only, not in any other page.
+      </div>
+      <Err error={error} />
+      {!data ? !error && <div className="empty">Loading...</div> : (
+        <>
+          <div className="grid stats">
+            <Stat label="Copies" value={s?.copies ?? 0} hint={`${s?.open ?? 0} still open`} />
+            <Stat label="Win rate" value={s?.win_rate != null ? `${Math.round(s.win_rate)}%` : "-"}
+              hint={`${s?.won ?? 0} of ${s?.copies ?? 0} made money`} />
+            <Stat label="Total" value={usd(s?.total_usd, true)} tone={s?.total_usd} hint="closed copies, after fees" />
+            <Stat label="Without best copy" value={s?.without_best_usd != null ? usd(s.without_best_usd, true) : "-"}
+              tone={s?.without_best_usd} hint={s?.best_usd != null ? `best copy was ${usd(s.best_usd, true)}` : " "} />
+            <Stat label="Open now" value={usd(s?.open_usd, true)} tone={s?.open_usd} hint="at the last sell quote" />
+            <Stat label="Skipped" value={s?.skipped ?? 0} hint={skips || "buys we couldn't copy"} />
+          </div>
+          {others.length > 0 && (
+            <div className="sub" style={{ marginTop: 8 }}>
+              Also watched: {others.map((w) => `${names.get(w.wallet!) ?? short(w.wallet)} ${w.copies} closed, ${usd(w.total_usd, true)}`).join("; ")}.
+            </div>
+          )}
+          <div className="card" style={{ marginTop: 14 }}>
+            <h3>Copies ({data.copies.length})</h3>
+            <Table rows={data.copies} rowKey={(c) => c.id} initialSort={{ key: "t", desc: true }}
+              empty="No copies yet. They start with the next buy on one of these coins."
+              cols={[
+                { key: "t", label: "Bought", sort: (c) => c.their_at, render: (c) => when(c.their_at) },
+                { key: "who", label: "Wallet", hideSm: true, render: (c) => names.get(c.wallet) ?? short(c.wallet) },
+                { key: "mint", label: "Coin", render: (c) => coin(c.mint) },
+                { key: "held", label: "Held", num: true, hideSm: true,
+                  sort: (c) => c.closed_at ? Date.parse(c.closed_at) - Date.parse(c.opened_at) : 0,
+                  render: (c) => c.closed_at ? dur((Date.parse(c.closed_at) - Date.parse(c.opened_at)) / 1000) : "-" },
+                { key: "sells", label: "Sells", num: true, hideSm: true, render: (c) => c.status === "skipped" ? "-" : c.sells },
+                { key: "res", label: "Result", num: true, sort: (c) => c.status === "skipped" ? -1e9 : c.pnl_usd, render: result },
+                { key: "route", label: "Route", hideSm: true, render: (c) => <span className="sub">{c.route || "-"}</span> },
+              ]} />
+          </div>
+        </>
+      )}
+    </>
+  );
+}
 
 export default function OtherCoinsPage() {
   const { data, error } = useApi<Resp>("other-coins", 60000);
@@ -48,11 +129,13 @@ export default function OtherCoinsPage() {
           </div>
         </div>
       </div>
+      <OurCopies names={names} />
+      <h3 style={{ margin: "26px 0 6px" }}>{whoName}&apos;s own result</h3>
       <div className="card" style={{ marginBottom: 14 }}>
         <b>{whoName}&apos;s own result at their prices, no copy delay, fees or slippage. Not what we would get.</b>
         <div className="sub" style={{ marginTop: 4 }}>
-          On SOL coins our copies normally do a bit worse than {whoName} does. We have almost no other trades on these
-          coins, so we can&apos;t work out a delayed copy.
+          On SOL coins our copies normally do a bit worse than {whoName} does. For what a delayed copy would get, see our
+          paper copies above.
         </div>
       </div>
       <Err error={error} />

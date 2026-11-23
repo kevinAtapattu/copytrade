@@ -252,3 +252,37 @@ type Event struct {
 	Message string    `json:"message"`
 	Data    any       `json:"data,omitempty"`
 }
+
+// NonsolCopy is a paper copy of a tracked wallet on a coin quoted in a token
+// other than SOL (pool "nonsol"), priced with Jupiter quotes (cmd/nonsolsim).
+// Kept in its own table, out of every SOL total.
+const (
+	NonsolOpen    = "open"
+	NonsolClosed  = "closed"
+	NonsolSkipped = "skipped"
+)
+
+type NonsolCopy struct {
+	ID           string     `json:"id"`
+	Wallet       string     `json:"wallet"`
+	Mint         string     `json:"mint"`
+	TheirSig     string     `json:"their_sig"`
+	TheirAt      time.Time  `json:"their_at"`  // their buy (when we received it)
+	OpenedAt     time.Time  `json:"opened_at"` // when our buy was quoted
+	ClosedAt     *time.Time `json:"closed_at,omitempty"`
+	Status       string     `json:"status"` // NonsolOpen | NonsolClosed | NonsolSkipped
+	SolUSD       float64    `json:"sol_usd"`
+	SolIn        float64    `json:"sol_in"`        // SOL into the buy swap
+	FeesSol      float64    `json:"fees_sol"`      // network + priority fee, all swaps
+	TokensBought int64      `json:"tokens_bought"` // raw units
+	TokensHeld   int64      `json:"tokens_held"`   // raw units
+	PendingSell  int64      `json:"pending_sell"`  // raw units a failed sell still owes
+	SolOut       float64    `json:"sol_out"`       // SOL from sells, before fees
+	Sells        int        `json:"sells"`
+	Route        string     `json:"route"`
+	SkipReason   string     `json:"skip_reason,omitempty"`
+	LastError    string     `json:"last_error,omitempty"`
+	MarkSol      float64    `json:"mark_sol"` // sell quote for what is held, open copies
+	MarkedAt     *time.Time `json:"marked_at,omitempty"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}

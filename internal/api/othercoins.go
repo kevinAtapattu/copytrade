@@ -206,7 +206,7 @@ func buildOtherCoins(trades []model.Trade) otherResult {
 	return res
 }
 
-// otherCoins: GET /api/other-coins?wallet=ADDR (default: the live wallets).
+// otherCoins: GET /api/other-coins?wallet=ADDR (default: the live wallets and NONSOL_WALLETS).
 func (s *Server) otherCoins(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var wallets []string
@@ -221,6 +221,13 @@ func (s *Server) otherCoins(w http.ResponseWriter, r *http.Request) {
 		for _, x := range ws {
 			if x.Status == model.StatusLive {
 				wallets = append(wallets, x.Address)
+			}
+		}
+		// Plus NONSOL_WALLETS (default nad), so the page still shows nad when
+		// rotation has moved it to bench.
+		for _, wl := range s.Cfg.NonsolWallets {
+			if !contains(wallets, wl) {
+				wallets = append(wallets, wl)
 			}
 		}
 	}
